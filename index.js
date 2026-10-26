@@ -20,8 +20,28 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json());
-app.use(express.static(__dirname));
+app.use(express.json({ limit: '10mb' }));
+// Serve only browser assets, never database files, deployment secrets or server source.
+const publicFiles = new Set(['/', '/index.html', '/admin.html', '/styles.css', '/admin.css',
+  '/app.js', '/admin.js', '/ui-runtime.js', '/theme.js', '/theme.css', '/glass.css', '/glass-dialogs.js', '/version.js', '/sw.js', '/manifest.json',
+  '/logo.jpg', '/logo.png', '/tell-icon.png']);
+const publicAssets = express.static(__dirname);
+app.use((req, res, next) => {
+  if (publicFiles.has(req.path) || req.path.startsWith('/icons/')) return publicAssets(req, res, next);
+  next();
+});
+let databaseReady = false;
+app.get('/api/health', (req, res) => {
+  res.status(databaseReady ? 200 : 503).json({ success: databaseReady, version: require('./version').npmVersion() });
+});
+app.get('/api/config', (req, res) => {
+  const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }];
+  const turnUrls = (process.env.TURN_URLS || '').split(',').map(url => url.trim()).filter(Boolean);
+  if (turnUrls.length && process.env.TURN_USERNAME && process.env.TURN_PASSWORD) {
+    iceServers.push({ urls: turnUrls, username: process.env.TURN_USERNAME, credential: process.env.TURN_PASSWORD });
+  }
+  res.set('Cache-Control', 'no-store').json({ success: true, iceServers });
+});
 
 // 存储在线用户和socket映射
 const onlineUsers = new Map();
@@ -88,7 +108,10 @@ io.on('connection', (socket) => {
 });
 
 // 确保uploads目录存在
-const uploadsDir = path.join(__dirname, 'uploads');
+const uploadsDir = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, 'uploads'));
+const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
+fs.mkdirSync(dataDir, { recursive: true });
+app.use('/uploads', express.static(uploadsDir));
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -119,7 +142,7 @@ const upload = multer({
 const DATABASE_URL = process.env.DATABASE_URL;
 const SALT_ROUNDS = 10;
 
-let ADMIN_PASSWORD = 'admin';
+let ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '114514';
 const ADMIN_USERNAME = 'admin';
 const ADMIN_CONFIG_KEY = 'admin_password';
 
@@ -169,6 +192,10 @@ async function initAdminPassword() {
     } catch (error) {
       console.error('Init admin password error:', error);
     }
+  } else {
+    const saved = await configDB.findOneAsync({ key: ADMIN_CONFIG_KEY });
+    if (saved) ADMIN_PASSWORD = saved.value;
+    else await configDB.insertAsync({ key: ADMIN_CONFIG_KEY, value: ADMIN_PASSWORD });
   }
 }
 
@@ -180,6 +207,9 @@ async function saveAdminPassword(password) {
     } catch (error) {
       console.error('Save admin password error:', error);
     }
+  } else {
+    await configDB.updateAsync({ key: ADMIN_CONFIG_KEY },
+      { $set: { key: ADMIN_CONFIG_KEY, value: password } }, { upsert: true });
   }
 }
 
@@ -189,7 +219,7 @@ if (DATABASE_URL) {
   const { Pool } = require('pg');
   const pool = new Pool({
     connectionString: DATABASE_URL,
-    ssl: DATABASE_URL ? { rejectUnauthorized: false } : false
+    ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
   });
 
   const db = {
@@ -212,23 +242,15 @@ if (DATABASE_URL) {
   configDB = db;
 } else {
   const Datastore = require('@seald-io/nedb');
-  usersDB = new Datastore({ filename: './data/users.db', autoload: true });
-  friendshipsDB = new Datastore({ filename: './data/friendships.db', autoload: true });
-  messagesDB = new Datastore({ filename: './data/messages.db', autoload: true });
-  groupsDB = new Datastore({ filename: './data/groups.db', autoload: true });
-  groupMembersDB = new Datastore({ filename: './data/group_members.db', autoload: true });
-  groupMessagesDB = new Datastore({ filename: './data/group_messages.db', autoload: true });
-  configDB = new Datastore({ filename: './data/config.db', autoload: true });
+  usersDB = new Datastore({ filename: path.join(dataDir, 'users.db'), autoload: false });
+  friendshipsDB = new Datastore({ filename: path.join(dataDir, 'friendships.db'), autoload: false });
+  messagesDB = new Datastore({ filename: path.join(dataDir, 'messages.db'), autoload: false });
+  groupsDB = new Datastore({ filename: path.join(dataDir, 'groups.db'), autoload: false });
+  groupMembersDB = new Datastore({ filename: path.join(dataDir, 'group_members.db'), autoload: false });
+  groupMessagesDB = new Datastore({ filename: path.join(dataDir, 'group_messages.db'), autoload: false });
+  configDB = new Datastore({ filename: path.join(dataDir, 'config.db'), autoload: false });
 
-  usersDB.ensureIndex({ fieldName: 'username', unique: true });
-  friendshipsDB.ensureIndex({ fieldName: 'user_id' });
-  friendshipsDB.ensureIndex({ fieldName: ['user_id', 'friend_id'], unique: true });
-  messagesDB.ensureIndex({ fieldName: 'sender_id' });
-  messagesDB.ensureIndex({ fieldName: 'receiver_id' });
-  groupsDB.ensureIndex({ fieldName: 'group_number', unique: true });
-  groupMembersDB.ensureIndex({ fieldName: 'group_id' });
-  groupMembersDB.ensureIndex({ fieldName: ['group_id', 'user_id'], unique: true });
-  groupMessagesDB.ensureIndex({ fieldName: 'group_id' });
+
 }
 
 async function initDB() {
@@ -339,22 +361,42 @@ async function initDB() {
       console.log('PostgreSQL database initialized successfully');
     } catch (error) {
       console.error('Database initialization error:', error);
+      throw error;
     }
   } else {
-    require('fs').mkdirSync('./data', { recursive: true });
+    await Promise.all([usersDB, friendshipsDB, messagesDB, groupsDB, groupMembersDB, groupMessagesDB, configDB].map(db =>
+      new Promise((resolve, reject) => db.loadDatabase(error => error ? reject(error) : resolve()))));
+    // NeDB supports single-field indexes; the original array fieldName created
+    // a unique undefined key, which prevented adding more friends/group members.
+    await friendshipsDB.removeIndexAsync('user_id,friend_id');
+    await groupMembersDB.removeIndexAsync('group_id,user_id');
+    await Promise.all([
+      usersDB.ensureIndexAsync({ fieldName: 'username', unique: true }),
+      friendshipsDB.ensureIndexAsync({ fieldName: 'user_id' }),
+      friendshipsDB.ensureIndexAsync({ fieldName: 'relationship_key', unique: true, sparse: true }),
+      messagesDB.ensureIndexAsync({ fieldName: 'sender_id' }),
+      messagesDB.ensureIndexAsync({ fieldName: 'receiver_id' }),
+      groupsDB.ensureIndexAsync({ fieldName: 'group_number', unique: true }),
+      groupMembersDB.ensureIndexAsync({ fieldName: 'group_id' }),
+      groupMembersDB.ensureIndexAsync({ fieldName: 'relationship_key', unique: true, sparse: true }),
+      groupMessagesDB.ensureIndexAsync({ fieldName: 'group_id' })
+    ]);
     console.log('NeDB database initialized successfully');
   }
 }
 
-initDB().then(() => {
-  initAdminPassword();
-  initAIAgent();
+initDB().then(async () => {
+  await initAdminPassword();
+  await initAIAgent();
+  databaseReady = true;
+}).catch(error => {
+  console.error('Startup failed:', error.message);
 });
 
 let AI_AGENT_ID = null;
 const AI_AGENT_USERNAME = 'AI';
 const AI_AGENT_NICKNAME = 'AI智能助手';
-let AI_API_KEY = process.env.AI_API_KEY || 'de2da1e5f1f24c54b645051fbe551e32.OdKI3urA59V4evNo';
+let AI_API_KEY = process.env.AI_API_KEY || '';
 
 let OFFICIAL_ACCOUNT_ID = null;
 const OFFICIAL_ACCOUNT_USERNAME = 'Tell';
@@ -816,6 +858,10 @@ function promisifyDB(method) {
     return new Promise((resolve, reject) => {
       const methodString = method.toString();
       if (methodString.includes('insert')) {
+        if (this === friendshipsDB || this === groupMembersDB) {
+          const key = this === friendshipsDB ? [query.user_id, query.friend_id] : [query.group_id, query.user_id];
+          query = { ...query, relationship_key: JSON.stringify(key) };
+        }
         method.call(this, query, (err, doc) => {
           if (err) reject(err);
           else resolve(doc);
@@ -1360,7 +1406,8 @@ app.get('/api/messages/:userId/:friendId', async (req, res) => {
           { sender_id: userId, receiver_id: friendId },
           { sender_id: friendId, receiver_id: userId }
         ]
-      }).sort({ timestamp: 1 });
+      });
+      msgs.sort((a, b) => a.timestamp - b.timestamp);
     }
 
     const messages = (DATABASE_URL ? msgs.rows : msgs).map(msg => {
@@ -1512,6 +1559,11 @@ app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
+app.use('/api/admin', (req, res, next) => {
+  if (req.method === 'POST' && ['/login', '/verify'].includes(req.path)) return next();
+  adminAuthMiddleware(req, res, next);
+});
+
 app.post('/api/admin/login', (req, res) => {
   const { username, password } = req.body;
 
@@ -1545,7 +1597,9 @@ app.post('/api/admin/verify', (req, res) => {
   }
 
   if (password === ADMIN_PASSWORD) {
-    res.json({ success: true });
+    const token = generateAdminToken();
+    adminTokens.push(token);
+    res.json({ success: true, token });
   } else {
     res.status(401).json({ success: false, message: '密码错误' });
   }
@@ -1730,7 +1784,8 @@ app.get('/api/admin/users', async (req, res) => {
     if (DATABASE_URL) {
       users = await usersDB.query('SELECT id, username, created_at FROM users ORDER BY created_at DESC');
     } else {
-      users = await promisifyDB(usersDB.find).call(usersDB, {}).sort({ created_at: -1 });
+      users = await promisifyDB(usersDB.find).call(usersDB, {});
+      users.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     }
     res.json({ success: true, users: DATABASE_URL ? users.rows : users });
   } catch (error) {
@@ -1808,7 +1863,8 @@ app.get('/api/admin/groups', async (req, res) => {
     if (DATABASE_URL) {
       groups = await groupsDB.query('SELECT id, group_number, name, owner_id, created_at FROM "groups" ORDER BY created_at DESC');
     } else {
-      groups = await promisifyDB(groupsDB.find).call(groupsDB, {}).sort({ created_at: -1 });
+      groups = await promisifyDB(groupsDB.find).call(groupsDB, {});
+      groups.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     }
     
     const groupList = DATABASE_URL ? groups.rows : groups;

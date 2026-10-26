@@ -1,0 +1,131 @@
+/* Frosted secondary surfaces; controls remain opaque and readable. */
+.chat-view {
+    background: var(--glass-page, rgba(241,245,252,.90));
+    -webkit-backdrop-filter: blur(20px) saturate(125%);
+    backdrop-filter: blur(20px) saturate(125%);
+    border: 1px solid var(--glass-edge);
+    box-shadow: var(--glass-shadow);
+}
+.chat-view::before {
+    content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+    background: radial-gradient(ellipse at 100% 0, var(--glass-tint), transparent 54%),
+        linear-gradient(145deg, var(--glass-highlight), transparent 48%);
+}
+.chat-header, .chat-view .message-input-area {
+    background: var(--glass-chrome);
+    border-color: var(--glass-edge);
+    -webkit-backdrop-filter: blur(16px) saturate(125%);
+    backdrop-filter: blur(16px) saturate(125%);
+}
+.chat-header { box-shadow: 0 1px 0 var(--glass-highlight); }
+.chat-view .message-input-area { border-top: 1px solid var(--glass-edge); }
+.modal, .call-modal {
+    inset: 0; left: 0; right: 0; width: 100%; max-width: none; transform: none;
+    background: var(--glass-scrim); padding: 20px;
+    -webkit-backdrop-filter: blur(7px) saturate(90%);
+    backdrop-filter: blur(7px) saturate(90%);
+    overflow-y: auto; overscroll-behavior: contain;
+}
+.modal-content, .call-modal-content, .theme-picker, .plus-menu, .tab-plus-menu, .glass-system-dialog {
+    background: linear-gradient(145deg, var(--glass-highlight), transparent 60%), var(--glass-panel);
+    color: var(--text-primary); border: 1px solid var(--glass-edge);
+    box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
+    -webkit-backdrop-filter: blur(24px) saturate(135%);
+    backdrop-filter: blur(24px) saturate(135%);
+    background-clip: padding-box;
+}
+.modal-content, .call-modal-content { border-radius: 24px; width: min(100%, 430px); max-width: 430px; max-height: calc(100dvh - 40px); overflow-y: auto; flex-shrink: 0; }
+.modal-header, .modal-footer { background: var(--glass-section); border-color: var(--glass-edge); }
+.modal-header { position: sticky; top: 0; z-index: 1; -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+.modal-body { background: transparent; }
+.modal-body input:not([type="checkbox"]):not([type="radio"]):not([type="file"]) + input { margin-top: 14px; }
+.modal-body .error-message:empty { display: none; }
+.modal-body .error-message:not(:empty) { margin-top: 12px; }
+.modal-body input { min-height: 46px; }
+.modal-footer { display: flex; gap: 10px; }
+.modal-footer button { flex: 1; width: auto; }
+.modal .close-btn, .modal .icon-btn, .theme-close {
+    background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 12px;
+    min-width: 36px; min-height: 36px; color: var(--text-primary);
+}
+.plus-menu, .tab-plus-menu { border-radius: 16px; padding: 6px; }
+.menu-item, .plus-menu-item { color: var(--text-primary); border-radius: 10px; }
+.menu-item:hover, .plus-menu-item:hover { background: var(--theme-soft); }
+.tab-plus-menu .menu-icon, .plus-menu-icon { color: var(--talk-blue); }
+.theme-picker { border-radius: 22px; }
+.theme-trigger { background: var(--glass-chrome); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+/* Discovery/settings stay compact on desktop instead of edge-to-edge white strips. */
+#tab-discover, #tab-me { min-height: calc(100dvh - 82px); padding-bottom: 24px; }
+#tab-discover > .tab-header { background: transparent; border: 0; justify-content: flex-start; max-width: 960px; margin: 0 auto; padding: 28px 24px 8px; }
+#tab-discover > .tab-header h2 { text-align: left; font-size: 25px; }
+.discover-list { max-width: 960px; margin: 12px auto 0; padding: 0 24px; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; background: transparent; }
+.discover-item {
+    background: var(--glass-panel); border: 1px solid var(--glass-edge); border-radius: 20px;
+    min-height: 104px; padding: 20px; gap: 14px; box-shadow: var(--shadow-sm);
+    -webkit-backdrop-filter: blur(16px) saturate(125%); backdrop-filter: blur(16px) saturate(125%);
+    transition: background-color 160ms, border-color 160ms, box-shadow 160ms;
+}
+.discover-item:hover, body.dark-mode .discover-item:hover { background: var(--theme-soft); border-color: var(--talk-blue); box-shadow: var(--shadow-md); }
+.discover-icon { width: 24px; height: 24px; margin: 0; color: var(--talk-blue); }
+.discover-copy { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.discover-copy small { display: block; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+.discover-item .arrow { font-size: 22px; margin-left: auto; }
+.profile-header { max-width: 912px; margin: 24px auto 22px; background: transparent; border: 0; padding: 24px; }
+.profile-header .avatar-large { width: 76px; height: 76px; box-shadow: var(--shadow-sm); color: var(--on-primary); }
+.settings-list { max-width: 912px; margin: 0 auto; padding: 0 24px; background: transparent; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+.settings-group { background: var(--glass-panel); border: 1px solid var(--glass-edge); border-radius: 22px; overflow: hidden; box-shadow: var(--shadow-sm); -webkit-backdrop-filter: blur(16px) saturate(125%); backdrop-filter: blur(16px) saturate(125%); }
+.settings-group-title { padding: 17px 20px 10px; color: var(--text-secondary); font-size: 12px; font-weight: 500; letter-spacing: .04em; }
+.settings-item { background: transparent; padding: 16px 20px; min-height: 62px; border-bottom: 0; gap: 12px; position: relative; }
+.settings-item + .settings-item::before { content: ''; position: absolute; left: 56px; right: 20px; top: 0; height: 1px; background: var(--border-color); }
+.settings-item:hover, body.dark-mode .settings-item:hover { background: var(--theme-soft); }
+.settings-item-left { gap: 12px; min-width: 0; }
+.settings-icon { margin: 0; width: 21px; height: 21px; color: var(--talk-blue); }
+.settings-item-left span { font-size: 14px; }
+#logout-btn, #logout-btn .settings-icon { color: #BE394B; }
+.footer-info { margin-top: 22px; }
+.glass-system-dialog {
+    position: fixed; inset: 0; margin: auto; padding: 0; width: min(430px, calc(100vw - 32px));
+    max-height: calc(100dvh - 40px); border-radius: 24px; overflow-y: auto;
+}
+.glass-system-dialog:not([open]) { display: none; }
+.glass-system-dialog::backdrop { background: var(--glass-scrim); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.glass-system-dialog h2 { font-size: 17px; margin: 0; }
+.glass-dialog-message { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+.glass-system-dialog .modal-header, .glass-system-dialog .modal-body, .glass-system-dialog .modal-footer { padding: 18px 22px; }
+.glass-system-dialog button { min-height: 44px; border-radius: 12px; font: inherit; cursor: pointer; }
+.glass-dialog-confirm { background: var(--talk-blue); color: var(--on-primary); border: 1px solid var(--talk-dark-blue); }
+.glass-dialog-cancel { background: var(--input-bg); color: var(--text-primary); border: 1px solid var(--input-border); }
+.glass-system-dialog button:focus-visible { outline: 3px solid var(--talk-blue); outline-offset: 3px; }
+.glass-system-dialog.glass-dialog-fallback { z-index: 100000; box-shadow: 0 0 0 100vmax var(--glass-scrim), var(--glass-shadow); }
+@media (min-width: 900px) {
+    .chat-view { inset: 20px; width: auto; height: auto; max-width: 1180px; margin-inline: auto; border-radius: 28px; overflow: hidden; }
+    .chat-header { min-height: 70px; padding-inline: 24px; }
+    .messages-container { padding: 24px; }
+    .chat-view .message-input-area { padding: 18px 24px; }
+    .modal-content { width: min(100%, 460px); max-width: 460px; }
+}
+@media (max-width: 600px) {
+    #tab-discover > .tab-header { padding: 24px 18px 8px; }
+    #tab-discover > .tab-header h2 { font-size: 23px; }
+    .discover-list { padding: 0 14px; grid-template-columns: 1fr; gap: 10px; }
+    .discover-item { min-height: 78px; padding: 15px 16px; border-radius: 18px; }
+    .profile-header { margin: 6px 0 8px; padding: 24px 18px; padding-right: 66px; }
+    .settings-list { padding: 0 14px; grid-template-columns: 1fr; gap: 16px; }
+    .settings-group { border-radius: 19px; }
+    .settings-item { padding: 15px 16px; min-height: 58px; }
+    .modal, .call-modal { padding: 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+    .modal-content, .call-modal-content { max-height: calc(100dvh - 24px); border-radius: 21px; }
+    .modal-header, .modal-footer { padding: 14px 16px; }
+    .modal-body { padding: 16px; }
+    .chat-view { border-width: 0; }
+    .theme-picker { -webkit-backdrop-filter: blur(18px) saturate(125%); backdrop-filter: blur(18px) saturate(125%); }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .chat-view, .chat-header, .chat-view .message-input-area, .modal-content, .call-modal-content,
+    .theme-picker, .plus-menu, .tab-plus-menu, .glass-system-dialog { background: var(--white); }
+}
+@media (prefers-reduced-transparency: reduce) {
+    .chat-view, .chat-header, .chat-view .message-input-area, .modal-content, .call-modal-content,
+    .theme-picker, .plus-menu, .tab-plus-menu, .glass-system-dialog { background: var(--white); -webkit-backdrop-filter: none; backdrop-filter: none; }
+    .modal, .call-modal, .glass-system-dialog::backdrop { -webkit-backdrop-filter: none; backdrop-filter: none; }
+}

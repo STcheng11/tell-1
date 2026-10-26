@@ -1,0 +1,72 @@
+/* Distinct surface, input and action layers across all three-color palettes. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="color"]),
+textarea, select, .modal-body input:not([type="checkbox"]):not([type="radio"]),
+.message-input-area #message-input, .message-input-area #group-message-input {
+    background: var(--input-bg, #edf2fa);
+    border: 1.5px solid var(--input-border, #a5b3c7);
+    color: var(--text-primary);
+    box-shadow: inset 0 1px 2px rgba(17, 33, 53, .035);
+}
+input::placeholder, textarea::placeholder { color: var(--text-secondary); opacity: 1; }
+input:focus-visible, textarea:focus-visible, select:focus-visible,
+.message-input-area #message-input:focus, .message-input-area #group-message-input:focus {
+    outline: 3px solid var(--theme-soft);
+    outline-offset: 2px;
+    border-color: var(--talk-blue);
+    background: var(--white);
+}
+.chat-header { padding-right: 68px; min-height: 64px; }
+.chat-header #back-btn, .chat-header #group-back-btn { min-width: 32px; }
+.tab-header { padding-right: 68px; min-height: 64px; }
+.profile-header { padding-right: 68px; }
+.admin-header .header-content { padding-right: 74px; }
+.password-container { border: 1px solid var(--input-border); box-shadow: var(--shadow-md); background: var(--white); }
+.btn-primary { color: var(--on-primary); }
+.theme-trigger {
+    position: fixed; right: max(12px, env(safe-area-inset-right)); top: max(10px, env(safe-area-inset-top));
+    width: 44px; height: 44px; border: 1px solid var(--input-border); border-radius: 15px;
+    background: var(--white); box-shadow: var(--shadow-sm); z-index: 4000;
+    display: grid; place-items: center; cursor: pointer;
+}
+.theme-trigger:focus-visible, .theme-picker button:focus-visible { outline: 3px solid var(--talk-blue); outline-offset: 3px; }
+.theme-trigger-colors { display: flex; align-items: center; padding: 3px; }
+.theme-trigger-colors i { width: 14px; height: 22px; border-radius: 8px; border: 1px solid rgba(127,127,127,.30); }
+.theme-trigger-colors i + i { margin-left: -5px; }
+.theme-picker { position: fixed; top: max(66px, calc(env(safe-area-inset-top) + 56px)); right: 12px; width: min(330px, calc(100vw - 24px));
+    max-height: calc(100dvh - 90px); overflow: auto; z-index: 4001; background: var(--white); color: var(--text-primary);
+    border: 1px solid var(--input-border); border-radius: 20px; padding: 18px; box-shadow: var(--shadow-md); }
+.theme-picker[hidden] { display: none; }
+.theme-picker-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.theme-picker-heading strong { font-size: 16px; }
+.theme-picker-heading span { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.theme-close { border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-primary); width: 36px; height: 36px; border-radius: 12px; font-size: 24px; cursor: pointer; }
+.theme-preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.theme-preset-grid button { background: var(--input-bg); border: 1.5px solid var(--input-border); color: var(--text-primary); border-radius: 13px; min-height: 78px; padding: 10px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; cursor: pointer; font: inherit; font-size: 13px; }
+.theme-preset-grid button[aria-pressed="true"] { border-color: var(--talk-blue); background: var(--theme-soft); box-shadow: 0 0 0 1px var(--talk-blue); }
+.theme-swatches { display: flex; width: 100%; height: 18px; border-radius: 6px; overflow: hidden; border: 1px solid rgba(127,127,127,.24); }
+.theme-swatches i { flex: 1; }
+.theme-custom { border: 0; border-top: 1px solid var(--border-color); padding: 12px 0 0; margin-top: 18px; min-width: 0; }
+.theme-custom legend { font-size: 13px; padding-right: 10px; }
+.theme-custom-inputs { display: flex; justify-content: space-between; gap: 12px; margin: 4px 0 12px; }
+.theme-custom-inputs label { flex: 1; font-size: 12px; color: var(--text-secondary); }
+.theme-custom-inputs input[type="color"] { display: block; width: 100%; height: 38px; margin-top: 6px; padding: 3px; border: 1px solid var(--input-border); border-radius: 9px; background: var(--input-bg); cursor: pointer; }
+#apply-custom-theme { width: 100%; min-height: 40px; border: 0; border-radius: 11px; background: var(--talk-blue); color: var(--on-primary); font-size: 13px; cursor: pointer; }
+.send-btn, form button[type="submit"], .group-action-btn, .create-group-btn, .add-friend-confirm-btn, .modal-footer button, .message.sent { color: var(--on-primary); }
+.modal-footer .btn-danger { color: white; }
+.modal-footer .btn-secondary { color: var(--text-primary); background: var(--input-bg); }
+.loading-spinner { border-top-color: var(--on-primary); }
+.create-group-btn { background: var(--talk-blue); border: 1px solid var(--talk-dark-blue); }
+.group-item { border-left-color: var(--theme-accent); }
+.chat-item .unread-badge { background: var(--theme-accent); color: var(--on-accent); }
+.auth-tab-slider { border: 1px solid var(--border-color); }
+.nav-slider { background: var(--theme-soft); }
+.modal { background: rgba(8, 17, 31, .48); }
+.modal-content { border: 1px solid var(--input-border); box-shadow: var(--shadow-md); background: var(--white); color: var(--text-primary); }
+.modal-footer button { min-height: 42px; }
+.modal-footer button:not(.danger) { border: 1px solid var(--input-border); }
+.theme-fallback-ring { position: fixed; border: 2px solid; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 100000; }
+html.theme-transition::view-transition-group(root) { animation-duration: 560ms; }
+html.theme-transition::view-transition-old(root), html.theme-transition::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+html.theme-transition::view-transition-old(root) { z-index: 1; }
+html.theme-transition::view-transition-new(root) { z-index: 2; }
+@media (prefers-reduced-motion: reduce) { .theme-picker, .theme-trigger { animation: none; transition: none; } }
