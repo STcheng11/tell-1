@@ -1,35 +1,24 @@
-const APP_VERSION = typeof VERSION !== 'undefined' ? VERSION.full() : 'v5.9.23';
+const APP_VERSION = typeof VERSION !== 'undefined' ? VERSION.full() : 'v5.9.71';
 
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && !window.TELL_NATIVE) {
     window.addEventListener('load', async () => {
         try {
-            const registration = await navigator.serviceWorker.register('/sw.js');
-            console.log('[App] Service Worker registered:', registration.scope);
-
+            // Updates take over the cache silently. Running JS and live inputs stay intact.
+            const registration = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
+            if (registration.waiting) registration.waiting.postMessage({ type: 'SKIP_WAITING' });
             registration.addEventListener('updatefound', () => {
-                const newWorker = registration.installing;
-                if (newWorker) {
-                    newWorker.addEventListener('statechange', () => {
-                        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                            if (confirm('发现新版本，是否立即更新？')) {
-                                newWorker.postMessage({ type: 'SKIP_WAITING' });
-                                window.location.reload();
-                            }
-                        }
-                    });
-                }
+                const worker = registration.installing;
+                worker?.addEventListener('statechange', () => {
+                    if (worker.state === 'installed') worker.postMessage({ type: 'SKIP_WAITING' });
+                });
             });
-
-            const version = await navigator.serviceWorker.ready.then(r => r.active?.scriptURL || 'unknown');
-            console.log('[App] Service Worker version:', version);
         } catch (error) {
             console.log('[App] Service Worker registration failed:', error);
         }
     });
-
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-        console.log('[App] Service Worker controller changed');
-        window.location.reload();
+        // New application code is used on the next normal navigation, never mid-conversation.
+        window.dispatchEvent(new CustomEvent('tell:update-ready'));
     });
 }
 
@@ -39,7 +28,7 @@ class ChatApp {
         this.currentFriend = null;
         this.messages = {};
         this.friends = [];
-        this.baseUrl = window.location.origin;
+        this.baseUrl = window.TELL_API_BASE_URL || window.location.origin;
         this.pollInterval = null;
         this.currentTab = 'chats';
         this.searchedFriend = null;
@@ -66,6 +55,10 @@ class ChatApp {
         this.callRingInterval = null;
         this.callRingAudioContext = null;
         
+        this.messageRevisions = new Map();
+        this.sendingConversations = new Set();
+        this.uiDrafts = new TellUI.Drafts(this);
+        this.iceServers = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }];
         this.loadBurnAfterReadingSetting();
         this.loadNotificationSettings();
         this.init();
@@ -208,16 +201,46 @@ class ChatApp {
 
     init() {
         this.bindEvents();
+        this.initSwitchers();
         this.initGroupEvents();
         this.loadLanguage();
         this.loadTheme();
         this.loadUserData();
         this.startUptimeTimer();
         this.initSocket();
+        this.fetchData('/api/config').then(result => {
+            if (result.success && Array.isArray(result.iceServers)) this.iceServers = result.iceServers;
+        });
+    }
+
+    initSwitchers() {
+        const keyboardTabs = (track, selector) => {
+            track.addEventListener('keydown', event => {
+                if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                const tabs = Array.from(track.querySelectorAll(selector));
+                const index = tabs.indexOf(document.activeElement);
+                if (index < 0) return;
+                event.preventDefault();
+                const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 :
+                    (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+                tabs[next].focus();
+                tabs[next].click();
+            });
+        };
+        keyboardTabs(document.querySelector('.auth-tabs'), '[role="tab"]');
+        keyboardTabs(document.querySelector('.bottom-nav'), '[role="tab"]');
+    }
+
+    updateSwitcher(track, index) {
+        track.style.setProperty('--active-index', index);
+        track.querySelectorAll('[role="tab"]').forEach((tab, position) => {
+            tab.setAttribute('aria-selected', String(position === index));
+            tab.tabIndex = position === index ? 0 : -1;
+        });
     }
     
     initSocket() {
-        this.socket = io();
+        this.socket = io(this.baseUrl);
         
         this.socket.on('connect', () => {
             console.log('Socket connected');
@@ -321,7 +344,7 @@ class ChatApp {
         document.getElementById('group-back-btn').addEventListener('click', () => this.closeGroupChatView());
         document.getElementById('send-group-btn').addEventListener('click', () => this.sendGroupMessage());
         document.getElementById('group-message-input').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') this.sendGroupMessage();
+            if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) this.sendGroupMessage();
         });
 
         document.getElementById('leave-group-btn').addEventListener('click', () => this.leaveGroup());
@@ -349,15 +372,15 @@ class ChatApp {
 
     async loadGroups() {
         if (!this.currentUser) return;
-        const result = await this.fetchData(`/api/groups/${this.currentUser.id}`);
-        if (result.success) {
+        const userId = this.currentUser.id;
+        const result = await this.fetchData(`/api/groups/${userId}`);
+        if (this.currentUser?.id === userId && result.success) {
             this.groups = result.groups;
         }
     }
 
     showCreateGroupModal() {
         document.getElementById('create-group-modal').style.display = 'flex';
-        document.getElementById('group-number-input').value = '';
     }
 
     closeCreateGroupModal() {
@@ -408,12 +431,12 @@ class ChatApp {
 
     async initiateCall() {
         if (!this.currentFriend) {
-            alert('请先选择一个好友');
+            await TellDialogs.alert('请先选择一个好友');
             return;
         }
 
         if (this.isInCall) {
-            alert('您正在通话中');
+            await TellDialogs.alert('您正在通话中');
             return;
         }
 
@@ -475,44 +498,14 @@ class ChatApp {
                 errorMessage = error.message;
             }
 
-            alert(errorMessage);
+            await TellDialogs.alert(errorMessage);
             this.endCall();
         }
     }
     
     createPeerConnection() {
-        const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-        
-        const iceServers = [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun.cloudflare.com:3478' },
-            { urls: 'stun:stun.qq.com:3478' }
-        ];
-        
-        iceServers.push({
-            urls: ['turn:114.215.182.61:3478', 'turn:114.215.182.61:3478?transport=tcp'],
-            username: 'telluser',
-            credential: 'tellpass2024'
-        });
-        iceServers.push({
-            urls: ['turn:relay.metered.ca:80', 'turn:relay.metered.ca:443'],
-            username: 'MeteredTurnServer',
-            credential: '8h95q4a7tb8z'
-        });
-        iceServers.push({
-            urls: ['turn:turn.openrelay.metered.ca:80', 'turn:turn.openrelay.metered.ca:443'],
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        });
-        
-        if (isLocal) {
-            iceServers.unshift({
-                urls: ['turn:localhost:3478', 'turn:localhost:3478?transport=tcp'],
-                username: 'test',
-                credential: 'test123'
-            });
-        }
-        
+        const iceServers = this.iceServers;
+
         const configuration = {
             iceServers: iceServers,
             iceTransportPolicy: 'all',
@@ -715,7 +708,7 @@ class ChatApp {
                 errorMessage = error.message;
             }
 
-            alert(errorMessage);
+            await TellDialogs.alert(errorMessage);
             this.rejectCall();
         }
     }
@@ -740,8 +733,8 @@ class ChatApp {
         this.endCall();
     }
     
-    handleCallReject(data) {
-        alert('对方拒绝了通话');
+    async handleCallReject(data) {
+        await TellDialogs.alert('对方拒绝了通话');
         this.endCall();
     }
 
@@ -755,6 +748,7 @@ class ChatApp {
 
         const messageExists = this.messages[friendId].some(m => m.id === id);
         if (!messageExists) {
+            this.bumpMessageRevision(false, friendId);
             this.messages[friendId].push({
                 id,
                 senderId: sender_id,
@@ -769,7 +763,7 @@ class ChatApp {
         }
 
         if (this.currentFriend && this.currentFriend.id === friendId) {
-            this.renderMessages(true);
+            this.renderMessages();
             this.markMessagesAsRead(friendId);
         } else {
             this.renderChatList();
@@ -791,7 +785,7 @@ class ChatApp {
                 nickname: friendNickname
             });
             this.renderChatList();
-            this.renderContactsList();
+            this.renderContacts();
         }
     }
     
@@ -1023,7 +1017,7 @@ class ChatApp {
         const groupNumber = document.getElementById('group-number-input').value.trim();
 
         if (!groupNumber) {
-            alert('请填写群号');
+            await TellDialogs.alert('请填写群号');
             return;
         }
 
@@ -1043,7 +1037,7 @@ class ChatApp {
             this.groups.push(result.group);
             this.openGroupChat(result.group.id);
         } else {
-            alert(result.message || '创建群聊失败');
+            await TellDialogs.alert(result.message || '创建群聊失败');
         }
     }
 
@@ -1051,7 +1045,12 @@ class ChatApp {
         const group = this.groups.find(g => g.id === groupId);
         if (!group) return;
 
-        this.currentGroup = group;
+        if (this.currentGroup?.id !== groupId) {
+            if (this.currentGroup) this.uiDrafts.capture(document.getElementById('group-message-input'));
+            this.currentGroup = group;
+            this.uiDrafts.restore(true, groupId);
+        }
+        if (this.currentFriend) this.closeChatView();
         document.getElementById('chat-view').style.display = 'none';
         document.getElementById('group-chat-view').style.display = 'flex';
         document.getElementById('group-chat-name').textContent = group.name;
@@ -1067,29 +1066,29 @@ class ChatApp {
 
         // 后台静默加载群成员和最新消息
         const membersResult = await this.fetchData(`/api/group/${groupId}/members`);
-        if (membersResult.success) {
+        if (membersResult.success && this.currentGroup?.id === groupId) {
             this.currentGroupMembers = membersResult.members;
         }
 
         // 如果没有开启阅后即焚，才加载消息
         if (!shouldBurn) {
             this.loadGroupMessages(groupId).then(() => {
-                this.renderGroupMessages(true); // 加载完成后滚动到底部
+                if (this.currentGroup?.id === groupId) this.renderGroupMessages();
             });
         }
     }
 
     async loadGroupMessages(groupId) {
-        if (this.burnAfterReadingGroupId === groupId) {
-            return;
-        }
+        const userId = this.currentUser?.id;
+        if (!userId || this.burnAfterReadingGroupId === groupId) return;
+        const revision = this.messageRevisions.get(`group:${groupId}`) || 0;
         const result = await this.fetchData(`/api/group/${groupId}/messages`);
-        if (result.success) {
-            this.groupMessages[groupId] = result.messages;
-        }
+        if (this.currentUser?.id === userId && result.success && revision === (this.messageRevisions.get(`group:${groupId}`) || 0)) this.groupMessages[groupId] = result.messages;
     }
 
     closeGroupChatView() {
+        this.uiDrafts.capture(document.getElementById('group-message-input'));
+        this.uiDrafts.flush();
         const shouldBurn = this.currentGroup && this.burnAfterReadingGroupId === this.currentGroup.id;
         if (shouldBurn) {
             const container = document.getElementById('group-messages-container');
@@ -1129,10 +1128,10 @@ class ChatApp {
     async deleteFriend() {
         if (!this.currentFriend) return;
         if (this.currentFriend.id === this.currentUser?.id) {
-            alert('无法删除自己');
+            await TellDialogs.alert('无法删除自己');
             return;
         }
-        if (!confirm(`确定要删除好友 ${this.currentFriend.username} 吗？`)) return;
+        if (!await TellDialogs.confirm(`确定要删除好友 ${this.currentFriend.username} 吗？`)) return;
 
         const result = await this.fetchData('/api/friend/delete', {
             method: 'POST',
@@ -1147,7 +1146,7 @@ class ChatApp {
             delete this.messages[this.currentFriend.id];
             this.closeChatView();
         } else {
-            alert(result.message || '删除失败');
+            await TellDialogs.alert(result.message || '删除失败');
         }
     }
 
@@ -1186,17 +1185,17 @@ class ChatApp {
     renderGroupMessages(scrollToBottom = false) {
         const container = document.getElementById('group-messages-container');
         if (!this.currentGroup) {
-            container.innerHTML = '<div class="empty-chat"><p>开始聊天吧！</p></div>';
+            TellUI.syncMessages(container, '<div class="empty-chat"><p>开始聊天吧！</p></div>', `group:${this.currentGroup?.id || ''}`, scrollToBottom);
             return;
         }
 
         const messages = this.groupMessages[this.currentGroup.id] || [];
         if (messages.length === 0) {
-            container.innerHTML = '<div class="empty-chat"><p>开始聊天吧！</p></div>';
+            TellUI.syncMessages(container, '<div class="empty-chat"><p>开始聊天吧！</p></div>', `group:${this.currentGroup?.id || ''}`, scrollToBottom);
             return;
         }
 
-        container.innerHTML = messages.map(msg => {
+        const html = messages.map(msg => {
             const isMine = msg.senderId === this.currentUser.id;
 
             let sender = null;
@@ -1215,31 +1214,31 @@ class ChatApp {
             const avatarUrl = sender?.avatar?.trim() || '';
             if (avatarUrl) {
                 avatarContent = `<div style="width: 40px; height: 40px; border-radius: 50%; overflow: hidden; flex-shrink: 0;">
-                    <img src="${avatarUrl}" alt="" style="width: 100%; height: 100%; object-fit: cover;">
+                    <img src="${TellUI.escapeHTML(avatarUrl)}" alt="" style="width: 100%; height: 100%; object-fit: cover;">
                 </div>`;
             } else {
-                avatarContent = `<div style="width: 40px; height: 40px; border-radius: 50%; background: var(--talk-blue); color: white; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 500; flex-shrink: 0;">
+                avatarContent = `<div style="width: 40px; height: 40px; border-radius: 50%; background: var(--talk-blue); color: var(--on-primary, white); display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 500; flex-shrink: 0;">
                     ${sender?.username?.charAt(0).toUpperCase() || 'U'}
                 </div>`;
             }
 
             const displayName = sender ? sender.username : (msg.senderName || '用户');
-            const textColor = isMine ? 'white' : 'var(--text-primary)';
+            const textColor = isMine ? 'var(--on-primary, white)' : 'var(--text-primary)';
             
             let messageContent = '';
             if (msg.type === 'image') {
-                messageContent = `<img src="${msg.content}" alt="" style="max-width: 200px; border-radius: 8px;">`;
+                messageContent = `<img src="${TellUI.escapeHTML(msg.content)}" alt="" style="max-width: 200px; border-radius: 8px;">`;
             } else {
-                messageContent = `<span style="color:${textColor};line-height:1.4;">${msg.content}</span>`;
+                messageContent = `<span style="color:${textColor};line-height:1.4;">${TellUI.escapeHTML(msg.content)}</span>`;
             }
             
             return `
-                <div class="message-item" style="display: flex; flex-direction: ${isMine ? 'row-reverse' : 'row'}; margin-bottom: 12px; padding: 0 12px;">
+                <div class="message-item" data-message-id="${TellUI.escapeHTML(msg.id)}" style="display: flex; flex-direction: ${isMine ? 'row-reverse' : 'row'}; margin-bottom: 12px; padding: 0 12px;">
                     <div class="avatar-container" style="flex-shrink: 0; margin-top: 4px;">
                         ${avatarContent}
                     </div>
                     <div style="display: flex; flex-direction: column; align-items: ${isMine ? 'flex-end' : 'flex-start'}; max-width: 70%;">
-                        <span style="font-size: 11px; color: #999; margin-bottom: 2px; padding: 0 4px;">${isMine ? '我' : displayName}</span>
+                        <span style="font-size: 11px; color: #999; margin-bottom: 2px; padding: 0 4px;">${isMine ? '我' : TellUI.escapeHTML(displayName)}</span>
                         <div style="background: ${isMine ? 'linear-gradient(135deg, var(--talk-blue), var(--talk-dark-blue))' : 'var(--white)'}; padding: 10px 14px; border-radius: ${isMine ? '18px 18px 4px 18px' : '18px 18px 18px 4px'}; box-shadow: var(--shadow-sm);">
                             ${messageContent}
                         </div>
@@ -1249,37 +1248,45 @@ class ChatApp {
             `;
         }).join('');
 
-        if (scrollToBottom) {
-            container.scrollTop = container.scrollHeight;
-        }
+        TellUI.syncMessages(container, html, `group:${this.currentGroup.id}`, scrollToBottom);
     }
 
     async sendGroupMessage() {
-        if (!this.currentGroup) return;
-
+        const conversationId = this.currentGroup?.id;
+        const userId = this.currentUser?.id;
+        if (!conversationId || !userId) return;
+        const key = `group:${conversationId}`;
+        if (this.sendingConversations.has(key)) return;
         const input = document.getElementById('group-message-input');
-        const content = input.value.trim();
+        const submittedValue = input.value;
+        const content = submittedValue.trim();
         if (!content) return;
-
+        this.sendingConversations.add(key);
+        this.uiDrafts.capture(input);
         this.setButtonLoading('send-group-btn', true);
-        const result = await this.fetchData('/api/group/message', {
-            method: 'POST',
-            body: JSON.stringify({
-                groupId: this.currentGroup.id,
-                senderId: this.currentUser.id,
-                content,
-                type: 'text'
-            })
-        });
-        this.setButtonLoading('send-group-btn', false);
-
-        if (result.success) {
-            if (!this.groupMessages[this.currentGroup.id]) {
-                this.groupMessages[this.currentGroup.id] = [];
+        try {
+            const result = await this.fetchData('/api/group/message', {
+                method: 'POST',
+                body: JSON.stringify({ groupId: conversationId, senderId: userId, content, type: 'text' })
+            });
+            if (this.currentUser?.id !== userId) return;
+            if (!result.success) { await TellDialogs.alert(result.message || '发送失败，草稿已保留'); return; }
+            this.bumpMessageRevision(true, conversationId);
+            const messages = this.groupMessages[conversationId] ||= [];
+            if (!messages.some(message => message.id === result.message.id)) messages.push(result.message);
+            const stillOpen = this.currentGroup?.id === conversationId;
+            const draftKey = this.uiDrafts.conversationKey(true, conversationId);
+            const latestValue = stillOpen ? input.value : this.uiDrafts.data.drafts[draftKey];
+            if (latestValue === submittedValue) {
+                this.uiDrafts.save(true, conversationId, '');
+                if (stillOpen) input.value = '';
             }
-            this.groupMessages[this.currentGroup.id].push(result.message);
-            input.value = '';
-            this.renderGroupMessages(true); // 发送新消息后滚动到底部
+            this.uiDrafts.flush();
+            if (stillOpen) this.renderGroupMessages(true);
+            this.renderChatList();
+        } finally {
+            this.sendingConversations.delete(key);
+            this.setButtonLoading('send-group-btn', false);
         }
     }
 
@@ -1309,11 +1316,11 @@ class ChatApp {
                 this.groupMessages[this.currentGroup.id].push(sendResult.message);
                 this.renderGroupMessages(true); // 发送新消息后滚动到底部
             } else {
-                alert(sendResult.message || '发送图片失败');
+                await TellDialogs.alert(sendResult.message || '发送图片失败');
             }
         } catch (error) {
             console.error('发送图片错误:', error);
-            alert('发送失败');
+            await TellDialogs.alert('发送失败');
         }
 
         // 清空文件输入
@@ -1355,16 +1362,16 @@ class ChatApp {
                     this.renderChatList();
                     const avatarPreview = document.getElementById('group-avatar-preview');
                     avatarPreview.innerHTML = `<img src="${result.avatar}" alt="" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">`;
-                    alert('群头像更新成功');
+                    await TellDialogs.alert('群头像更新成功');
                 } else {
-                    alert(updateResult.message || '更新失败');
+                    await TellDialogs.alert(updateResult.message || '更新失败');
                 }
             } else {
-                alert(result.message || '上传图片失败');
+                await TellDialogs.alert(result.message || '上传图片失败');
             }
         } catch (error) {
             console.error('Upload avatar error:', error);
-            alert('上传失败');
+            await TellDialogs.alert('上传失败');
         }
 
         e.target.value = '';
@@ -1373,7 +1380,7 @@ class ChatApp {
     async saveGroupAccount() {
         const groupAccount = document.getElementById('group-account-input').value.trim();
         if (!groupAccount) {
-            alert('请输入群账号');
+            await TellDialogs.alert('请输入群账号');
             return;
         }
 
@@ -1395,9 +1402,9 @@ class ChatApp {
                 this.groups[groupIndex] = this.currentGroup;
             }
             this.renderChatList();
-            alert('群账号更新成功');
+            await TellDialogs.alert('群账号更新成功');
         } else {
-            alert(result.message || '更新失败');
+            await TellDialogs.alert(result.message || '更新失败');
         }
     }
 
@@ -1484,7 +1491,7 @@ class ChatApp {
         const friendIds = Array.from(checkboxes).map(cb => cb.value);
 
         if (friendIds.length === 0) {
-            alert('请选择要邀请的好友');
+            await TellDialogs.alert('请选择要邀请的好友');
             return;
         }
 
@@ -1499,9 +1506,9 @@ class ChatApp {
 
         if (result.success) {
             this.closeInviteFriendsModal();
-            alert(result.message);
+            await TellDialogs.alert(result.message);
         } else {
-            alert(result.message || '邀请失败');
+            await TellDialogs.alert(result.message || '邀请失败');
         }
     }
 
@@ -1516,7 +1523,7 @@ class ChatApp {
             document.getElementById('search-group-number').textContent = '群号: ' + result.group.group_number;
             this.searchedGroup = result.group;
         } else {
-            alert('群不存在');
+            await TellDialogs.alert('群不存在');
         }
     }
 
@@ -1546,13 +1553,13 @@ class ChatApp {
             await this.loadGroups();
             this.openGroupChat(this.searchedGroup.id);
         } else {
-            alert(result.message || '加入失败');
+            await TellDialogs.alert(result.message || '加入失败');
         }
     }
 
     async leaveGroup() {
         if (!this.currentGroup) return;
-        if (!confirm('确定要退出群聊吗？')) return;
+        if (!await TellDialogs.confirm('确定要退出群聊吗？')) return;
 
         const result = await this.fetchData('/api/group/leave', {
             method: 'POST',
@@ -1566,13 +1573,13 @@ class ChatApp {
             this.groups = this.groups.filter(g => g.id !== this.currentGroup.id);
             this.closeGroupChatView();
         } else {
-            alert(result.message || '退出失败');
+            await TellDialogs.alert(result.message || '退出失败');
         }
     }
 
     async dissolveGroup() {
         if (!this.currentGroup) return;
-        if (!confirm('确定要解散群聊吗？此操作不可恢复！')) return;
+        if (!await TellDialogs.confirm('确定要解散群聊吗？此操作不可恢复！')) return;
 
         const result = await this.fetchData('/api/group/dissolve', {
             method: 'POST',
@@ -1586,7 +1593,7 @@ class ChatApp {
             this.groups = this.groups.filter(g => g.id !== this.currentGroup.id);
             this.closeGroupChatView();
         } else {
-            alert(result.message || '解散失败');
+            await TellDialogs.alert(result.message || '解散失败');
         }
     }
 
@@ -1697,7 +1704,7 @@ class ChatApp {
         document.getElementById('back-btn').addEventListener('click', () => this.closeChatView());
         document.getElementById('send-btn').addEventListener('click', () => this.send());
         document.getElementById('message-input').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') this.send();
+            if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) this.send();
         });
 
         document.getElementById('logout-btn').addEventListener('click', () => this.logout());
@@ -1801,56 +1808,56 @@ class ChatApp {
         const btn = document.getElementById(btnId);
         if (!btn) return;
         if (isLoading) {
+            if (btn.classList.contains('loading-btn')) return;
             btn.dataset.originalText = btn.textContent;
-            btn.innerHTML = '<span class="loading-spinner"></span>';
+            btn.innerHTML = '<span class="loading-spinner" aria-hidden="true"></span>';
             btn.classList.add('loading-btn');
+            btn.setAttribute('aria-busy', 'true');
         } else {
             btn.textContent = btn.dataset.originalText || originalText;
             btn.classList.remove('loading-btn');
+            btn.removeAttribute('aria-busy');
         }
     }
 
     startPolling() {
-        this.pollInterval = setInterval(() => {
-            if (this.currentUser) {
-                this.loadMessages();
-                this.pollGroupMessages();
+        this.stopPolling();
+        const generation = this.pollGeneration;
+        const tick = async () => {
+            if (generation !== this.pollGeneration || !this.currentUser) return;
+            try {
+                if (!document.hidden) {
+                    await this.loadGroups();
+                    await this.loadMessages();
+                    await this.pollGroupMessages();
+                }
+            } finally {
+                if (generation === this.pollGeneration && this.currentUser) this.pollInterval = setTimeout(tick, 2000);
             }
-        }, 2000);
+        };
+        this.pollInterval = setTimeout(tick, 2000);
     }
 
     async pollGroupMessages() {
-        // 同时刷新群列表（确保被邀请的人能看到新群）
-        if (this.currentUser) {
-            await this.loadGroups();
-        }
-        
-        // 刷新群消息
-        for (const group of this.groups) {
-            await this.loadGroupMessages(group.id);
-        }
-        
-        // 如果在群聊界面，重新加载群成员和渲染消息
-        if (this.currentGroup) {
-            const membersResult = await this.fetchData(`/api/group/${this.currentGroup.id}/members`);
-            if (membersResult.success) {
-                this.currentGroupMembers = membersResult.members;
-            }
+        const groupId = this.currentGroup?.id;
+        const userId = this.currentUser?.id;
+        if (!groupId || !userId) return;
+        const result = await this.fetchData(`/api/group/${groupId}/members`);
+        if (this.currentUser?.id !== userId || this.currentGroup?.id !== groupId) return;
+        if (result.success) {
+            this.currentGroupMembers = result.members;
             this.renderGroupMessages();
         }
-        
-        // 重新渲染聊天列表
-        this.renderChatList();
     }
 
     stopPolling() {
-        if (this.pollInterval) {
-            clearInterval(this.pollInterval);
-            this.pollInterval = null;
-        }
+        this.pollGeneration = (this.pollGeneration || 0) + 1;
+        clearTimeout(this.pollInterval);
+        this.pollInterval = null;
     }
 
     showLogin() {
+        this.updateSwitcher(document.querySelector('.auth-tabs'), 0);
         document.getElementById('login-tab').classList.add('active');
         document.getElementById('register-tab').classList.remove('active');
         document.getElementById('login-form').style.display = 'flex';
@@ -1860,6 +1867,7 @@ class ChatApp {
     }
 
     showRegister() {
+        this.updateSwitcher(document.querySelector('.auth-tabs'), 1);
         document.getElementById('register-tab').classList.add('active');
         document.getElementById('login-tab').classList.remove('active');
         document.getElementById('register-form').style.display = 'flex';
@@ -1901,6 +1909,7 @@ class ChatApp {
             document.getElementById('auth-screen').style.display = 'none';
             document.getElementById('main-screen').style.display = 'flex';
             
+            this.uiDrafts.activate();
             this.updateProfileSkeleton();
             this.renderChatListUltraFast();
             this.renderContactsUltraFast();
@@ -2131,6 +2140,7 @@ class ChatApp {
         document.getElementById('auth-screen').style.display = 'none';
         document.getElementById('main-screen').style.display = 'flex';
         this.updateProfile();
+        this.uiDrafts.activate();
     }
 
     async handleRegister(e) {
@@ -2253,14 +2263,18 @@ class ChatApp {
             localStorage.setItem('currentUser', JSON.stringify(this.currentUser));
             this.closeChangeUsernameModal();
             this.updateProfile();
-            alert('账号修改成功');
+            await TellDialogs.alert('账号修改成功');
         } else {
             document.getElementById('change-username-error').textContent = result.message || '修改失败';
         }
     }
 
     switchTab(tab) {
+        const names = ['chats', 'contacts', 'discover', 'me'];
+        if (!names.includes(tab)) return;
+        const previous = names.indexOf(this.currentTab);
         this.currentTab = tab;
+        this.updateSwitcher(document.querySelector('.bottom-nav'), names.indexOf(tab));
 
         document.querySelectorAll('.nav-item').forEach(item => {
             item.classList.remove('active');
@@ -2275,6 +2289,7 @@ class ChatApp {
 
         const tabContent = document.getElementById(`tab-${tab}`);
         if (tabContent) {
+            tabContent.style.setProperty('--panel-offset', names.indexOf(tab) >= previous ? '10px' : '-10px');
             tabContent.classList.add('active');
         }
 
@@ -2306,16 +2321,16 @@ class ChatApp {
             groupsSection.style.display = 'block';
             const groupHtml = this.groups.map(group => `
                 <div class="contact-item" data-group-id="${group.id}">
-                    <div class="avatar" style="background: linear-gradient(135deg, #667eea, #764ba2);">
+                    <div class="avatar" style="background: linear-gradient(135deg, var(--talk-blue), var(--talk-dark-blue));">
                         ${group.avatar ? `<img src="${group.avatar}" alt="">` : '群'}
                     </div>
                     <span class="contact-name">${group.name || group.account}</span>
                 </div>
             `).join('');
-            groupList.innerHTML = groupHtml;
+            TellUI.syncMarkup(groupList, groupHtml);
         } else {
             groupsSection.style.display = 'none';
-            groupList.innerHTML = '';
+            TellUI.syncMarkup(groupList, '');
         }
 
         if (this.friends.length > 0) {
@@ -2328,10 +2343,10 @@ class ChatApp {
                     <span class="contact-name">${friend.nickname || friend.username}${friend.id === this.currentUser?.id ? ' (我)' : ''}</span>
                 </div>
             `).join('');
-            friendList.innerHTML = friendHtml;
+            TellUI.syncMarkup(friendList, friendHtml);
         } else {
             friendsSection.style.display = 'none';
-            friendList.innerHTML = '';
+            TellUI.syncMarkup(friendList, '');
         }
     }
 
@@ -2339,7 +2354,7 @@ class ChatApp {
         const chatList = document.getElementById('chat-list');
         
         if (this.groups.length === 0 && this.friends.length === 0) {
-            chatList.innerHTML = '<div class="empty-state">暂无好友或群聊，请搜索添加</div>';
+            TellUI.syncMarkup(chatList, '<div class="empty-state">暂无好友或群聊，请搜索添加</div>');
             return;
         }
         
@@ -2355,7 +2370,7 @@ class ChatApp {
             if (group.avatar && group.avatar.trim()) {
                 avatarHtml = `<div style="width: 100%; height: 100%; border-radius: 50%; overflow: hidden;"><img src="${group.avatar}" alt="" style="width: 100%; height: 100%; object-fit: cover;"></div>`;
             } else {
-                avatarHtml = `<div style="width: 100%; height: 100%; border-radius: 50%; background: linear-gradient(135deg, #667eea, #764ba2); color: white; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 500;">G</div>`;
+                avatarHtml = `<div style="width: 100%; height: 100%; border-radius: 50%; background: linear-gradient(135deg, var(--talk-blue), var(--talk-dark-blue)); color: var(--on-primary, white); display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 500;">G</div>`;
             }
             
             chatItems.push({
@@ -2382,7 +2397,7 @@ class ChatApp {
                 avatarHtml = `<div style="width: 100%; height: 100%; border-radius: 50%; overflow: hidden;"><img src="${friend.avatar}" alt="" style="width: 100%; height: 100%; object-fit: cover;"></div>`;
             } else {
                 const initial = friend.username ? friend.username.charAt(0).toUpperCase() : '?';
-                avatarHtml = `<div style="width: 100%; height: 100%; border-radius: 50%; background: var(--talk-blue); color: white; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 500;">${initial}</div>`;
+                avatarHtml = `<div style="width: 100%; height: 100%; border-radius: 50%; background: var(--talk-blue); color: var(--on-primary, white); display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 500;">${initial}</div>`;
             }
             
             chatItems.push({
@@ -2405,8 +2420,8 @@ class ChatApp {
                 html += `<div class="chat-item group-item" data-group-id="${item.id}" onclick="app.openGroupChat('${item.id}')">
                     <div class="avatar">${item.avatarHtml}</div>
                     <div class="chat-info">
-                        <div class="chat-name">${item.name}${item.role === 'owner' ? ' (群主)' : ''}</div>
-                        <div class="chat-preview">${item.lastMsg ? item.lastMsg.content : '暂无消息'}</div>
+                        <div class="chat-name">${TellUI.escapeHTML(item.name)}${item.role === 'owner' ? ' (群主)' : ''}</div>
+                        <div class="chat-preview">${item.lastMsg ? (item.lastMsg.type === 'image' ? '[图片]' : TellUI.escapeHTML(item.lastMsg.content)) : '暂无消息'}</div>
                     </div>
                     <div>${item.lastMsg ? `<div class="chat-time">${item.lastMsg.time}</div>` : ''}</div>
                 </div>`;
@@ -2415,207 +2430,30 @@ class ChatApp {
                     <div class="avatar">${item.avatarHtml}</div>
                     <div class="chat-info">
                         <div class="chat-name">${item.id === this.currentUser?.id ? item.username + ' (我)' : item.username}</div>
-                        <div class="chat-preview">${item.lastMsg ? (item.lastMsg.type === 'image' ? '[图片]' : item.lastMsg.content) : '暂无消息'}</div>
+                        <div class="chat-preview">${item.lastMsg ? (item.lastMsg.type === 'image' ? '[图片]' : TellUI.escapeHTML(item.lastMsg.content)) : '暂无消息'}</div>
                     </div>
                     <div>${item.lastMsg ? `<div class="chat-time">${item.lastMsg.time}</div>` : ''}${item.unread > 0 ? `<div class="unread-badge">${item.unread}</div>` : ''}</div>
                 </div>`;
             }
         }
         
-        chatList.innerHTML = html;
+        TellUI.syncMarkup(chatList, html);
     }
 
     renderChatListFast() {
-        const chatList = document.getElementById('chat-list');
-        const groupsLen = this.groups.length;
-        const friendsLen = this.friends.length;
-        
-        if (groupsLen === 0 && friendsLen === 0) {
-            chatList.innerHTML = '<div class="empty-state">暂无好友或群聊，请搜索添加</div>';
-            return;
-        }
-
-        const arr = [];
-        const push = arr.push.bind(arr);
-
-        for (let i = 0; i < groupsLen; i++) {
-            const g = this.groups[i];
-            const msgs = this.groupMessages[g.id];
-            const lastMsg = msgs && msgs.length ? msgs[msgs.length - 1] : null;
-            const avatar = g.avatar && g.avatar.trim() 
-                ? `<div style="width:100%;height:100%;border-radius:50%;overflow:hidden;"><img src="${g.avatar}" alt="" style="width:100%;height:100%;object-fit:cover;"></div>`
-                : `<div style="width:100%;height:100%;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2);color:white;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:500;">G</div>`;
-            
-            push(`<div class="chat-item group-item" data-group-id="${g.id}" onclick="app.openGroupChat('${g.id}')"><div class="avatar">${avatar}</div><div class="chat-info"><div class="chat-name">${g.name}${g.role === 'owner' ? ' (群主)' : ''}</div><div class="chat-preview">${lastMsg ? lastMsg.content : '暂无消息'}</div></div><div>${lastMsg ? `<div class="chat-time">${lastMsg.time}</div>` : ''}</div></div>`);
-        }
-
-        for (let i = 0; i < friendsLen; i++) {
-            const f = this.friends[i];
-            const msgs = this.messages[f.id];
-            const lastMsg = msgs && msgs.length ? msgs[msgs.length - 1] : null;
-            const unread = this.getUnreadCount(f.id);
-            const initial = f.username ? f.username.charAt(0).toUpperCase() : '?';
-            const avatar = f.avatar && f.avatar.trim()
-                ? `<div style="width:100%;height:100%;border-radius:50%;overflow:hidden;"><img src="${f.avatar}" alt="" style="width:100%;height:100%;object-fit:cover;"></div>`
-                : `<div style="width:100%;height:100%;border-radius:50%;background:var(--talk-blue);color:white;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:500;">${initial}</div>`;
-            
-            push(`<div class="chat-item" data-friend-id="${f.id}" onclick="app.openChat('${f.id}')"><div class="avatar">${avatar}</div><div class="chat-info"><div class="chat-name">${f.id === this.currentUser?.id ? f.username + ' (我)' : f.username}</div><div class="chat-preview">${lastMsg ? (lastMsg.type === 'image' ? '[图片]' : lastMsg.content) : '暂无消息'}</div></div><div>${lastMsg ? `<div class="chat-time">${lastMsg.time}</div>` : ''}${unread > 0 ? `<div class="unread-badge">${unread}</div>` : ''}</div></div>`);
-        }
-
-        chatList.innerHTML = arr.join('');
+        return this.renderChatList();
     }
 
     renderChatListUltraFast() {
-        const chatList = document.getElementById('chat-list');
-        const groups = this.groups;
-        const friends = this.friends;
-        const groupsLen = groups.length;
-        const friendsLen = friends.length;
-        const userId = this.currentUser?.id;
-        
-        if (groupsLen === 0 && friendsLen === 0) {
-            chatList.innerHTML = '<div class="empty-state">暂无好友或群聊，请搜索添加</div>';
-            return;
-        }
-
-        // 使用 DocumentFragment 批量 DOM 操作，比 innerHTML 更快
-        const fragment = document.createDocumentFragment();
-        
-        // 缓存元素创建函数
-        const createChatItem = (id, name, isGroup, role, avatar, isSelf) => {
-            const div = document.createElement('div');
-            div.className = isGroup ? 'chat-item group-item' : 'chat-item';
-            div.dataset[isGroup ? 'groupId' : 'friendId'] = id;
-            div.dataset.avatar = avatar || '';
-            div.onclick = isGroup 
-                ? () => this.openGroupChat(id) 
-                : () => this.openChat(id);
-            
-            const avatarInitial = name ? name.charAt(0).toUpperCase() : (isGroup ? 'G' : '?');
-            const avatarBg = isGroup 
-                ? 'linear-gradient(135deg,#667eea,#764ba2)' 
-                : 'var(--talk-blue)';
-            
-            div.innerHTML = `
-                <div class="avatar"><div style="width:100%;height:100%;border-radius:50%;background:${avatarBg};color:white;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:500;">${avatarInitial}</div></div>
-                <div class="chat-info">
-                    <div class="chat-name">${name}${isGroup && role === 'owner' ? ' (群主)' : ''}${!isGroup && isSelf ? ' (我)' : ''}</div>
-                    <div class="chat-preview">暂无消息</div>
-                </div>
-                <div></div>
-            `;
-            return div;
-        };
-
-        for (let i = 0; i < groupsLen; i++) {
-            const g = groups[i];
-            fragment.appendChild(createChatItem(g.id, g.name, true, g.role, g.avatar, false));
-        }
-
-        for (let i = 0; i < friendsLen; i++) {
-            const f = friends[i];
-            fragment.appendChild(createChatItem(f.id, f.username, false, null, f.avatar, f.id === userId));
-        }
-
-        // 清空并一次性插入
-        chatList.innerHTML = '';
-        chatList.appendChild(fragment);
+        return this.renderChatList();
     }
 
     renderContactsUltraFast() {
-        const groupList = document.getElementById('contacts-group-list');
-        const friendList = document.getElementById('contacts-friend-list');
-        const groups = this.groups;
-        const friends = this.friends;
-        const groupsLen = groups.length;
-        const friendsLen = friends.length;
-        const userId = this.currentUser?.id;
-
-        const createContactItem = (id, name, isGroup, avatar) => {
-            const div = document.createElement('div');
-            div.className = 'contact-item';
-            div.dataset[isGroup ? 'groupId' : 'friendId'] = id;
-            div.dataset.avatar = avatar || '';
-            
-            const initial = name ? name.charAt(0).toUpperCase() : (isGroup ? '群' : '?');
-            const avatarBg = isGroup 
-                ? 'linear-gradient(135deg,#667eea,#764ba2)' 
-                : 'linear-gradient(135deg,var(--talk-blue),var(--talk-dark-blue))';
-            
-            div.innerHTML = `
-                <div class="avatar" style="background:${avatarBg};">${initial}</div>
-                <span class="contact-name">${name}</span>
-            `;
-            return div;
-        };
-
-        if (groupsLen > 0) {
-            document.getElementById('contacts-groups-section').style.display = 'block';
-            const fragment = document.createDocumentFragment();
-            for (let i = 0; i < groupsLen; i++) {
-                const g = groups[i];
-                fragment.appendChild(createContactItem(g.id, g.name || g.account, true, g.avatar));
-            }
-            groupList.innerHTML = '';
-            groupList.appendChild(fragment);
-        } else {
-            document.getElementById('contacts-groups-section').style.display = 'none';
-            groupList.innerHTML = '';
-        }
-
-        if (friendsLen > 0) {
-            document.getElementById('contacts-friends-section').style.display = 'block';
-            const fragment = document.createDocumentFragment();
-            for (let i = 0; i < friendsLen; i++) {
-                const f = friends[i];
-                const name = (f.nickname || f.username) + (f.id === userId ? ' (我)' : '');
-                fragment.appendChild(createContactItem(f.id, name, false, f.avatar));
-            }
-            friendList.innerHTML = '';
-            friendList.appendChild(fragment);
-        } else {
-            document.getElementById('contacts-friends-section').style.display = 'none';
-            friendList.innerHTML = '';
-        }
+        return this.renderContacts();
     }
 
     renderContactsFast() {
-        const groupsSection = document.getElementById('contacts-groups-section');
-        const friendsSection = document.getElementById('contacts-friends-section');
-        const groupList = document.getElementById('contacts-group-list');
-        const friendList = document.getElementById('contacts-friend-list');
-        const groupsLen = this.groups.length;
-        const friendsLen = this.friends.length;
-
-        if (groupsLen > 0) {
-            groupsSection.style.display = 'block';
-            const arr = [];
-            const push = arr.push.bind(arr);
-            for (let i = 0; i < groupsLen; i++) {
-                const g = this.groups[i];
-                push(`<div class="contact-item" data-group-id="${g.id}"><div class="avatar" style="background:linear-gradient(135deg,#667eea,#764ba2);">${g.avatar ? `<img src="${g.avatar}" alt="">` : '群'}</div><span class="contact-name">${g.name || g.account}</span></div>`);
-            }
-            groupList.innerHTML = arr.join('');
-        } else {
-            groupsSection.style.display = 'none';
-            groupList.innerHTML = '';
-        }
-
-        if (friendsLen > 0) {
-            friendsSection.style.display = 'block';
-            const arr = [];
-            const push = arr.push.bind(arr);
-            const userId = this.currentUser?.id;
-            for (let i = 0; i < friendsLen; i++) {
-                const f = this.friends[i];
-                const name = f.nickname || f.username;
-                push(`<div class="contact-item" data-friend-id="${f.id}"><div class="avatar" style="background:linear-gradient(135deg,var(--talk-blue),var(--talk-dark-blue));">${f.avatar ? `<img src="${f.avatar}" alt="">` : name.charAt(0).toUpperCase()}</div><span class="contact-name">${name}${f.id === userId ? ' (我)' : ''}</span></div>`);
-            }
-            friendList.innerHTML = arr.join('');
-        } else {
-            friendsSection.style.display = 'none';
-            friendList.innerHTML = '';
-        }
+        return this.renderContacts();
     }
     
     _generateChatListHtml() {
@@ -2632,7 +2470,7 @@ class ChatApp {
             if (group.avatar && group.avatar.trim()) {
                 avatarHtml = `<div style="width: 100%; height: 100%; border-radius: 50%; overflow: hidden;"><img src="${group.avatar}" alt="" style="width: 100%; height: 100%; object-fit: cover;"></div>`;
             } else {
-                avatarHtml = `<div style="width: 100%; height: 100%; border-radius: 50%; background: linear-gradient(135deg, #667eea, #764ba2); color: white; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 500;">G</div>`;
+                avatarHtml = `<div style="width: 100%; height: 100%; border-radius: 50%; background: linear-gradient(135deg, var(--talk-blue), var(--talk-dark-blue)); color: var(--on-primary, white); display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 500;">G</div>`;
             }
             
             len(`<div class="chat-item group-item" data-group-id="${group.id}" onclick="app.openGroupChat('${group.id}')">
@@ -2657,7 +2495,7 @@ class ChatApp {
                 avatarHtml = `<div style="width: 100%; height: 100%; border-radius: 50%; overflow: hidden;"><img src="${friend.avatar}" alt="" style="width: 100%; height: 100%; object-fit: cover;"></div>`;
             } else {
                 const initial = friend.username ? friend.username.charAt(0).toUpperCase() : '?';
-                avatarHtml = `<div style="width: 100%; height: 100%; border-radius: 50%; background: var(--talk-blue); color: white; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 500;">${initial}</div>`;
+                avatarHtml = `<div style="width: 100%; height: 100%; border-radius: 50%; background: var(--talk-blue); color: var(--on-primary, white); display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 500;">${initial}</div>`;
             }
             
             len(`<div class="chat-item" data-friend-id="${friend.id}" onclick="app.openChat('${friend.id}')">
@@ -2681,138 +2519,79 @@ class ChatApp {
     async loadFriends() {
         if (!this.currentUser) return;
 
-        const result = await this.fetchData(`/api/friends/${this.currentUser.id}`);
-        if (result.success) {
+        const userId = this.currentUser.id;
+        const result = await this.fetchData(`/api/friends/${userId}`);
+        if (this.currentUser?.id === userId && result.success) {
             this.friends = result.friends;
         }
     }
 
     async loadMessages() {
-        if (!this.currentUser) return;
-
-        let hasNewMessages = false;
-        const oldMessages = JSON.parse(JSON.stringify(this.messages));
-
-        for (const friend of this.friends) {
-            const result = await this.fetchData(`/api/messages/${this.currentUser.id}/${friend.id}`);
-            if (result.success) {
-                if (this.burnAfterReadingFriendId === friend.id) {
-                    continue;
-                }
-                const oldCount = (this.messages[friend.id] || []).length;
-                this.messages[friend.id] = result.messages;
-                const newCount = result.messages.length;
-                if (newCount > oldCount && this.isNotificationEnabled(friend.id, false) && this.messagesLoaded) {
-                    const newMsgs = result.messages.slice(oldCount);
-                    const hasNewFromOther = newMsgs.some(m => m.senderId !== this.currentUser.id);
-                    if (hasNewFromOther) {
-                        this.playNotificationSound('message');
-                        break;
-                    }
-                }
+        const userId = this.currentUser?.id;
+        if (!userId) return;
+        let notify = false;
+        const jobs = [
+            ...this.friends.map(friend => ({ group: false, id: friend.id })),
+            ...this.groups.map(group => ({ group: true, id: group.id }))
+        ];
+        let cursor = 0;
+        // Bounded concurrency, a single request per conversation and no overlapping poll ticks.
+        await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, async () => {
+            while (cursor < jobs.length) {
+                const { group, id } = jobs[cursor++];
+                if ((group ? this.burnAfterReadingGroupId : this.burnAfterReadingFriendId) === id) continue;
+                const key = `${group ? 'group' : 'friend'}:${id}`;
+                const revision = this.messageRevisions.get(key) || 0;
+                const result = await this.fetchData(group ? `/api/group/${id}/messages` : `/api/messages/${userId}/${id}`);
+                if (this.currentUser?.id !== userId) return;
+                if (!result.success || !Array.isArray(result.messages) || revision !== (this.messageRevisions.get(key) || 0)) continue;
+                const store = group ? this.groupMessages : this.messages;
+                const previous = store[id] || [];
+                const known = new Set(previous.map(message => message.id));
+                if (this.messagesLoaded && this.isNotificationEnabled(id, group) && result.messages.some(message => !known.has(message.id) && message.senderId !== userId)) notify = true;
+                if (JSON.stringify(previous) !== JSON.stringify(result.messages)) store[id] = result.messages;
             }
-        }
+        }));
+        if (this.currentUser?.id !== userId) return;
+        this.messagesLoaded = true;
+        if (notify) this.playNotificationSound('message');
+        this.renderChatList();
+        this.renderContacts();
+        if (this.currentFriend) this.renderMessages();
+        if (this.currentGroup) this.renderGroupMessages();
+        this.uiDrafts.restoreView();
+    }
 
-        for (const group of this.groups) {
-            const result = await this.fetchData(`/api/group/${group.id}/messages`);
-            if (result.success) {
-                if (this.burnAfterReadingGroupId === group.id) {
-                    continue;
-                }
-                const oldCount = (this.groupMessages[group.id] || []).length;
-                this.groupMessages[group.id] = result.messages;
-                const newCount = result.messages.length;
-                if (newCount > oldCount && this.isNotificationEnabled(group.id, true) && this.messagesLoaded) {
-                    const newMsgs = result.messages.slice(oldCount);
-                    const hasNewFromOther = newMsgs.some(m => m.senderId !== this.currentUser.id);
-                    if (hasNewFromOther) {
-                        this.playNotificationSound('message');
-                        break;
-                    }
-                }
-            }
-        }
-
-        for (const friend of this.friends) {
-            const oldCount = (oldMessages[friend.id] || []).length;
-            const newCount = (this.messages[friend.id] || []).length;
-            if (newCount > oldCount) {
-                hasNewMessages = true;
-                break;
-            }
-        }
-
-        if (hasNewMessages || this.currentTab === 'chats') {
-            this.renderChatList();
-        }
-
-        if (this.currentFriend) {
-            const oldCount = (oldMessages[this.currentFriend.id] || []).length;
-            const newCount = (this.messages[this.currentFriend.id] || []).length;
-            if (newCount > oldCount) {
-                this.renderMessages(true);
-            }
-        }
+    bumpMessageRevision(group, id) {
+        const key = `${group ? 'group' : 'friend'}:${id}`;
+        this.messageRevisions.set(key, (this.messageRevisions.get(key) || 0) + 1);
     }
 
     async loadMessagesFast() {
-        if (!this.currentUser) return;
-
-        const loadPromises = [];
-        
-        for (const friend of this.friends) {
-            if (this.burnAfterReadingFriendId !== friend.id) {
-                loadPromises.push(
-                    this.fetchData(`/api/messages/${this.currentUser.id}/${friend.id}`)
-                        .then(result => {
-                            if (result.success) {
-                                this.messages[friend.id] = result.messages;
-                            }
-                        })
-                );
-            }
-        }
-
-        for (const group of this.groups) {
-            if (this.burnAfterReadingGroupId !== group.id) {
-                loadPromises.push(
-                    this.fetchData(`/api/group/${group.id}/messages`)
-                        .then(result => {
-                            if (result.success) {
-                                this.groupMessages[group.id] = result.messages;
-                            }
-                        })
-                );
-            }
-        }
-
-        await Promise.all(loadPromises);
-        this.messagesLoaded = true;
-        this.renderChatList();
+        return this.loadMessages();
     }
 
     async loadMessagesForFriend(friendId) {
-        if (!this.currentUser) return;
-
-        if (this.burnAfterReadingFriendId === friendId) {
-            return;
-        }
-
-        const result = await this.fetchData(`/api/messages/${this.currentUser.id}/${friendId}`);
-        if (result.success) {
-            this.messages[friendId] = result.messages;
-            this.renderChatList();
-            if (this.currentFriend && this.currentFriend.id === friendId) {
-                this.renderMessages();
-            }
-        }
+        const userId = this.currentUser?.id;
+        if (!userId || this.burnAfterReadingFriendId === friendId) return;
+        const revision = this.messageRevisions.get(`friend:${friendId}`) || 0;
+        const result = await this.fetchData(`/api/messages/${userId}/${friendId}`);
+        if (this.currentUser?.id !== userId || !result.success || revision !== (this.messageRevisions.get(`friend:${friendId}`) || 0)) return;
+        this.messages[friendId] = result.messages;
+        this.renderChatList();
+        if (this.currentFriend?.id === friendId) this.renderMessages();
     }
 
     openChat(friendId) {
         const friend = this.friends.find(f => f.id === friendId);
         if (!friend) return;
 
-        this.currentFriend = friend;
+        if (this.currentFriend?.id !== friendId) {
+            if (this.currentFriend) this.uiDrafts.capture(document.getElementById('message-input'));
+            this.currentFriend = friend;
+            this.uiDrafts.restore(false, friendId);
+        }
+        if (this.currentGroup) this.closeGroupChatView();
         document.getElementById('chat-friend-name').textContent = friend.username;
         document.getElementById('chat-view').style.display = 'flex';
         
@@ -2826,6 +2605,8 @@ class ChatApp {
     }
 
     closeChatView() {
+        this.uiDrafts.capture(document.getElementById('message-input'));
+        this.uiDrafts.flush();
         const shouldBurn = this.currentFriend && this.burnAfterReadingFriendId === this.currentFriend.id;
         if (shouldBurn) {
             const container = document.getElementById('messages-container');
@@ -2841,6 +2622,7 @@ class ChatApp {
 
     async markMessagesAsRead(friendId) {
         const friendMessages = this.messages[friendId] || [];
+        this.bumpMessageRevision(false, friendId);
         friendMessages.forEach(m => m.read = true);
 
         await this.fetchData('/api/mark-read', {
@@ -2855,7 +2637,7 @@ class ChatApp {
         const container = document.getElementById('messages-container');
 
         if (!this.currentFriend) {
-            container.innerHTML = '<div class="empty-chat"><p>开始聊天吧！</p></div>';
+            TellUI.syncMessages(container, '<div class="empty-chat"><p>开始聊天吧！</p></div>', `friend:${this.currentFriend?.id || ''}`, scrollToBottom);
             return;
         }
 
@@ -2863,7 +2645,7 @@ class ChatApp {
         const len = friendMessages.length;
 
         if (len === 0) {
-            container.innerHTML = '<div class="empty-chat"><p>开始聊天吧！</p></div>';
+            TellUI.syncMessages(container, '<div class="empty-chat"><p>开始聊天吧！</p></div>', `friend:${this.currentFriend?.id || ''}`, scrollToBottom);
             return;
         }
 
@@ -2884,26 +2666,26 @@ class ChatApp {
             let avatarContent = '';
             if (sender) {
                 if (sender.avatar && sender.avatar.trim() !== '') {
-                    avatarContent = `<div style="width:40px;height:40px;border-radius:50%;overflow:hidden;flex-shrink:0;"><img src="${sender.avatar}" alt="" style="width:100%;height:100%;object-fit:cover;"></div>`;
+                    avatarContent = `<div style="width:40px;height:40px;border-radius:50%;overflow:hidden;flex-shrink:0;"><img src="${TellUI.escapeHTML(sender.avatar)}" alt="" style="width:100%;height:100%;object-fit:cover;"></div>`;
                 } else {
-                    avatarContent = `<div style="width:40px;height:40px;border-radius:50%;background:var(--talk-blue);color:white;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:500;flex-shrink:0;">${sender.username.charAt(0).toUpperCase()}</div>`;
+                    avatarContent = `<div style="width:40px;height:40px;border-radius:50%;background:var(--talk-blue);color:var(--on-primary, white);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:500;flex-shrink:0;">${sender.username.charAt(0).toUpperCase()}</div>`;
                 }
             }
 
             const direction = isMine ? 'row-reverse' : 'row';
             const alignItems = isMine ? 'flex-end' : 'flex-start';
             const bgColor = isMine ? 'linear-gradient(135deg,var(--talk-blue),var(--talk-dark-blue))' : 'var(--white)';
-            const textColor = isMine ? 'white' : 'var(--text-primary)';
+            const textColor = isMine ? 'var(--on-primary, white)' : 'var(--text-primary)';
             const borderRadius = isMine ? '18px 18px 4px 18px' : '18px 18px 18px 4px';
 
             let messageContent = '';
             if (msg.type === 'image') {
-                messageContent = `<img src="${msg.content}" alt="" style="max-width:200px;border-radius:8px;">`;
+                messageContent = `<img src="${TellUI.escapeHTML(msg.content)}" alt="" style="max-width:200px;border-radius:8px;">`;
             } else {
-                messageContent = `<span style="color:${textColor};line-height:1.4;">${msg.content}</span>`;
+                messageContent = `<span style="color:${textColor};line-height:1.4;">${TellUI.escapeHTML(msg.content)}</span>`;
             }
 
-            html += `<div class="message-item" style="display:flex;flex-direction:${direction};margin-bottom:12px;padding:0 12px;">` +
+            html += `<div class="message-item" data-message-id="${TellUI.escapeHTML(msg.id)}" style="display:flex;flex-direction:${direction};margin-bottom:12px;padding:0 12px;">` +
                 `<div class="avatar-container" style="flex-shrink:0;margin-top:4px;">${avatarContent}</div>` +
                 `<div style="display:flex;flex-direction:column;align-items:${alignItems};max-width:70%;">` +
                 `<div style="background:${bgColor};padding:10px 14px;border-radius:${borderRadius};box-shadow:var(--shadow-sm);">${messageContent}</div>` +
@@ -2911,11 +2693,7 @@ class ChatApp {
                 `</div></div>`;
         }
 
-        container.innerHTML = html;
-
-        if (scrollToBottom) {
-            container.scrollTop = container.scrollHeight;
-        }
+        TellUI.syncMessages(container, html, `friend:${this.currentFriend.id}`, scrollToBottom);
     }
 
     async handleSearchFriend(e) {
@@ -2953,7 +2731,7 @@ class ChatApp {
 
         // 2. 如果不是群号，搜索用户
         if (searchText === this.currentUser.username) {
-            alert('不能添加自己');
+            await TellDialogs.alert('不能添加自己');
             return;
         }
 
@@ -2970,7 +2748,7 @@ class ChatApp {
             this.searchedFriend = result.user;
             this.showSearchResult(result.user);
         } else {
-            alert('用户或群不存在');
+            await TellDialogs.alert('用户或群不存在');
         }
     }
 
@@ -3024,7 +2802,7 @@ class ChatApp {
             document.getElementById('search-input').value = '';
             this.openGroupChat(this.searchedGroup.id);
         } else {
-            alert(result.message || '加入群聊失败');
+            await TellDialogs.alert(result.message || '加入群聊失败');
         }
     }
 
@@ -3049,7 +2827,7 @@ class ChatApp {
             this.renderChatList();
             this.openChat(result.friend.id);
         } else {
-            alert(result.message || '添加失败');
+            await TellDialogs.alert(result.message || '添加失败');
         }
     }
 
@@ -3059,31 +2837,41 @@ class ChatApp {
     }
 
     async send() {
-        this.closePlusMenu();
+        const conversationId = this.currentFriend?.id;
+        const userId = this.currentUser?.id;
+        if (!conversationId || !userId) return;
+        const key = `friend:${conversationId}`;
+        if (this.sendingConversations.has(key)) return;
         const input = document.getElementById('message-input');
-        const content = input.value.trim();
+        const submittedValue = input.value;
+        const content = submittedValue.trim();
         if (!content) return;
-
+        this.sendingConversations.add(key);
+        this.uiDrafts.capture(input);
         this.setButtonLoading('send-btn', true);
-        const result = await this.fetchData('/api/send-message', {
-            method: 'POST',
-            body: JSON.stringify({
-                senderId: this.currentUser.id,
-                receiverId: this.currentFriend.id,
-                content,
-                type: 'text'
-            })
-        });
-        this.setButtonLoading('send-btn', false);
-
-        if (result.success) {
-            if (!this.messages[this.currentFriend.id]) {
-                this.messages[this.currentFriend.id] = [];
+        try {
+            const result = await this.fetchData('/api/send-message', {
+                method: 'POST',
+                body: JSON.stringify({ senderId: userId, receiverId: conversationId, content, type: 'text' })
+            });
+            if (this.currentUser?.id !== userId) return;
+            if (!result.success) { await TellDialogs.alert(result.message || '发送失败，草稿已保留'); return; }
+            this.bumpMessageRevision(false, conversationId);
+            const messages = this.messages[conversationId] ||= [];
+            if (!messages.some(message => message.id === result.message.id)) messages.push(result.message);
+            const stillOpen = this.currentFriend?.id === conversationId;
+            const draftKey = this.uiDrafts.conversationKey(false, conversationId);
+            const latestValue = stillOpen ? input.value : this.uiDrafts.data.drafts[draftKey];
+            if (latestValue === submittedValue) {
+                this.uiDrafts.save(false, conversationId, '');
+                if (stillOpen) input.value = '';
             }
-            this.messages[this.currentFriend.id].push(result.message);
-            input.value = '';
-            this.renderMessages(true); // 发送新消息后滚动到底部
+            this.uiDrafts.flush();
+            if (stillOpen) this.renderMessages(true);
             this.renderChatList();
+        } finally {
+            this.sendingConversations.delete(key);
+            this.setButtonLoading('send-btn', false);
         }
     }
 
@@ -3112,11 +2900,11 @@ class ChatApp {
                 this.renderChatList();
                 this.renderMessages();
             } else {
-                alert('上传失败: ' + (result.message || '未知错误'));
+                await TellDialogs.alert('上传失败: ' + (result.message || '未知错误'));
             }
         } catch (error) {
             console.error('上传头像错误:', error);
-            alert('上传失败');
+            await TellDialogs.alert('上传失败');
         }
 
         e.target.value = '';
@@ -3148,11 +2936,11 @@ class ChatApp {
                 this.renderMessages(true); // 发送新消息后滚动到底部
                 this.renderChatList();
             } else {
-                alert('发送失败: ' + (sendResult.message || '未知错误'));
+                await TellDialogs.alert('发送失败: ' + (sendResult.message || '未知错误'));
             }
         } catch (error) {
             console.error('发送图片错误:', error);
-            alert('发送失败');
+            await TellDialogs.alert('发送失败');
         }
 
         e.target.value = '';
@@ -3242,18 +3030,19 @@ class ChatApp {
 
         if (result.success) {
             this.closeChangePasswordModal();
-            alert('密码修改成功！');
+            await TellDialogs.alert('密码修改成功！');
         } else {
             errorElement.textContent = result.message || '修改失败';
         }
     }
 
-    logout(force = false) {
-        if (!force && !confirm('确定要退出登录吗？')) {
+    async logout(force = false) {
+        if (!force && !await TellDialogs.confirm('确定要退出登录吗？')) {
             return;
         }
         this.stopPolling();
         this.stopPasswordVersionCheck();
+        this.uiDrafts.clear();
         localStorage.removeItem('currentUser');
         localStorage.removeItem('cachedFriends');
         localStorage.removeItem('cachedGroups');
@@ -3265,27 +3054,28 @@ class ChatApp {
         this.friends = [];
         this.groups = [];
         this.groupMessages = {};
+        document.querySelectorAll('.chat-view, .modal').forEach(view => { view.style.display = 'none'; });
         
         // 清空所有界面元素，防止隐私泄露
         const chatList = document.getElementById('chat-list');
         if (chatList) {
-            chatList.innerHTML = '';
+            TellUI.syncMarkup(chatList, '');
         }
         const messagesContainer = document.getElementById('messages-container');
         if (messagesContainer) {
-            messagesContainer.innerHTML = '';
+            TellUI.syncMarkup(messagesContainer, '');
         }
         const groupMessagesContainer = document.getElementById('group-messages-container');
         if (groupMessagesContainer) {
-            groupMessagesContainer.innerHTML = '';
+            TellUI.syncMarkup(groupMessagesContainer, '');
         }
         const contactsGroupList = document.getElementById('contacts-group-list');
         if (contactsGroupList) {
-            contactsGroupList.innerHTML = '';
+            TellUI.syncMarkup(contactsGroupList, '');
         }
         const contactsFriendList = document.getElementById('contacts-friend-list');
         if (contactsFriendList) {
-            contactsFriendList.innerHTML = '';
+            TellUI.syncMarkup(contactsFriendList, '');
         }
         
         document.getElementById('main-screen').style.display = 'none';
@@ -3312,7 +3102,7 @@ class ChatApp {
         this.saveNotificationSettings();
     }
 
-    shareApp() {
+    async shareApp() {
         const url = window.location.href;
         if (navigator.share) {
             navigator.share({
@@ -3322,13 +3112,16 @@ class ChatApp {
             });
         } else {
             navigator.clipboard.writeText(url);
-            alert('链接已复制到剪贴板！');
+            await TellDialogs.alert('链接已复制到剪贴板！');
         }
     }
 
     async fetchData(url, options = {}) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
         try {
             const defaultOptions = {
+                signal: controller.signal,
                 headers: {
                     'Content-Type': 'application/json',
                     ...options.headers
@@ -3346,6 +3139,8 @@ class ChatApp {
         } catch (error) {
             console.error('Fetch error:', error);
             return { success: false, message: '网络错误' };
+        } finally {
+            clearTimeout(timeout);
         }
     }
 
@@ -3547,11 +3342,11 @@ class ChatApp {
         }
 
         // 发现页
-        document.querySelector('#share-app-btn span:nth-child(2)').textContent = t.shareApp;
-        document.querySelector('#admin-panel-btn span:nth-child(2)').textContent = t.adminPanel;
-        document.querySelector('#tell-intro-btn span:nth-child(2)').textContent = t.tellIntro;
-        document.querySelector('#contact-developer-btn span:nth-child(2)').textContent = t.contactDeveloper;
-        document.querySelector('#other-projects-btn span:nth-child(2)').textContent = t.otherProjects;
+        document.querySelector('#share-app-btn .discover-copy > span').textContent = t.shareApp;
+        document.querySelector('#admin-panel-btn .discover-copy > span').textContent = t.adminPanel;
+        document.querySelector('#tell-intro-btn .discover-copy > span').textContent = t.tellIntro;
+        document.querySelector('#contact-developer-btn .discover-copy > span').textContent = t.contactDeveloper;
+        document.querySelector('#other-projects-btn .discover-copy > span').textContent = t.otherProjects;
 
         // 更新日志
         const updateTitle = document.querySelector('#update-header h3');

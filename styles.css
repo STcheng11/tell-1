@@ -110,17 +110,7 @@ body {
     color: var(--talk-blue);
 }
 
-.auth-tabs button.active::after {
-    content: '';
-    position: absolute;
-    bottom: -1px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 40px;
-    height: 3px;
-    background: var(--talk-blue);
-    border-radius: 1.5px;
-}
+
 
 form {
     display: flex;
@@ -150,7 +140,7 @@ form input {
     border-radius: 16px;
     font-size: 1rem;
     background: var(--bg-color);
-    transition: all 0.3s;
+    transition: color 0.2s, background-color 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s;
     width: 100%;
     max-width: 450px;
     box-sizing: border-box;
@@ -172,7 +162,7 @@ form button[type="submit"] {
     font-size: 1.05rem;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.3s;
+    transition: color 0.2s, background-color 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s;
     box-shadow: var(--shadow-sm);
     width: 100%;
     max-width: 450px;
@@ -558,7 +548,7 @@ form button[type="submit"]:hover {
 .nav-icon {
     width: 24px;
     height: 24px;
-    transition: all 0.3s ease;
+    transition: fill 0.2s ease, color 0.2s ease, transform 0.2s ease;
 }
 
 .nav-item svg.nav-icon {
@@ -692,7 +682,7 @@ form button[type="submit"]:hover {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.3s;
+    transition: color 0.2s, background-color 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s;
     box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3);
 }
 
@@ -1016,6 +1006,41 @@ form button[type="submit"]:hover {
     }
 }
 
+/* Animate only view entry and genuinely new messages; polling never restarts them. */
+.chat-view {
+    animation: tell-view-enter 180ms ease-out;
+}
+
+.modal-content {
+    animation: tell-modal-enter 160ms ease-out;
+}
+
+@keyframes tell-view-enter {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tell-modal-enter {
+    from { opacity: 0; transform: translateY(6px) scale(0.99); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.messages-container {
+    overflow-anchor: none; /* Scroll anchoring is handled once by ui-runtime.js. */
+    overscroll-behavior: contain;
+}
+
+.loading-btn { min-width: 64px; }
+.message-item img { max-width: 100%; height: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+    }
+}
+
 @media (min-width: 768px) {
     .main-wrapper {
         max-width: none;
@@ -1148,7 +1173,7 @@ form button[type="submit"]:hover {
     border-radius: 20px;
     font-size: 14px;
     cursor: pointer;
-    transition: all 0.3s;
+    transition: color 0.2s, background-color 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
 
 .add-friend-confirm-btn:hover {
@@ -1633,7 +1658,7 @@ body.dark-mode .toggle-slider {
     font-weight: 500;
     border: none;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: background-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
 
 .call-btn-primary {
@@ -1661,4 +1686,50 @@ body.dark-mode .toggle-slider {
 
 .call-btn-danger:hover {
     background: #ff3838;
+}
+
+/* Flat adaptation of smooth-option-switcher: permanent, equal-width indicators.
+   No nested options exist in Tell's tab model. Source/provenance: THIRD_PARTY.md. */
+.auth-tabs {
+    --active-index: 0;
+    position: relative;
+    padding: 4px;
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    background: var(--bg-color);
+    isolation: isolate;
+}
+.auth-tabs button { z-index: 1; border-radius: 12px; min-width: 0; transition: color 180ms ease; }
+.auth-tab-slider {
+    position: absolute;
+    left: 4px; top: 4px; bottom: 4px;
+    width: calc((100% - 8px) / 2);
+    border-radius: 12px;
+    background: var(--white);
+    box-shadow: var(--shadow-sm);
+    transform: translateX(calc(var(--active-index) * 100%));
+    transition: transform 360ms cubic-bezier(0.34, 0.96, 0.6, 0.99);
+    pointer-events: none;
+}
+.bottom-nav { --active-index: 0; padding-left: 8px; padding-right: 8px; isolation: isolate; }
+.nav-slider {
+    position: absolute;
+    left: 8px; top: 8px; bottom: 15px;
+    width: calc((100% - 16px) / 4);
+    background: rgba(0, 122, 255, 0.10);
+    border-radius: 14px;
+    transform: translateX(calc(var(--active-index) * 100%));
+    transition: transform 360ms cubic-bezier(0.34, 0.96, 0.6, 0.99);
+    pointer-events: none;
+}
+button.nav-item { position: relative; z-index: 1; background: none; border: 0; font: inherit; min-width: 0; padding: 5px 4px; }
+.auth-tabs button:focus-visible, .nav-item:focus-visible { outline: 2px solid var(--talk-blue); outline-offset: 2px; }
+.tab-content.active { animation: tell-panel-enter 220ms cubic-bezier(0.34, 0.96, 0.6, 0.99); }
+@keyframes tell-panel-enter {
+    from { opacity: 0.6; transform: translateX(var(--panel-offset, 10px)); }
+    to { opacity: 1; transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .auth-tab-slider, .nav-slider { transition: none; }
+    .tab-content.active { animation: none; }
 }

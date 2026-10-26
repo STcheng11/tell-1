@@ -1,6 +1,7 @@
 class AdminPanel {
     constructor() {
-        this.baseUrl = window.location.origin;
+        this.baseUrl = window.TELL_API_BASE_URL || window.location.origin;
+        this.adminToken = null;
         this.users = [];
         this.filteredUsers = [];
         this.groups = [];
@@ -11,6 +12,11 @@ class AdminPanel {
         this.selectedUsers = new Set();
         this.selectedGroups = new Set();
         this.init();
+    }
+
+    adminFetch(url, options = {}) {
+        return fetch(url, { ...options, headers: { ...options.headers,
+            ...(this.adminToken ? { 'x-admin-token': this.adminToken } : {}) } });
     }
 
     init() {
@@ -33,7 +39,7 @@ class AdminPanel {
         const errorElement = document.getElementById('password-error');
         
         try {
-            const response = await fetch(`${this.baseUrl}/api/admin/verify`, {
+            const response = await this.adminFetch(`${this.baseUrl}/api/admin/verify`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ password })
@@ -42,6 +48,7 @@ class AdminPanel {
             const data = await response.json();
 
             if (data.success) {
+                this.adminToken = data.token;
                 this.showApp();
             } else {
                 errorElement.textContent = '密码错误，请重试';
@@ -129,9 +136,9 @@ class AdminPanel {
     async loadStats() {
         try {
             const [usersRes, messagesRes, friendshipsRes] = await Promise.all([
-                fetch(`${this.baseUrl}/api/admin/stats/users`),
-                fetch(`${this.baseUrl}/api/admin/stats/messages`),
-                fetch(`${this.baseUrl}/api/admin/stats/friendships`)
+                this.adminFetch(`${this.baseUrl}/api/admin/stats/users`),
+                this.adminFetch(`${this.baseUrl}/api/admin/stats/messages`),
+                this.adminFetch(`${this.baseUrl}/api/admin/stats/friendships`)
             ]);
 
             const usersData = await usersRes.json();
@@ -148,7 +155,7 @@ class AdminPanel {
 
     async loadUsers() {
         try {
-            const response = await fetch(`${this.baseUrl}/api/admin/users`);
+            const response = await this.adminFetch(`${this.baseUrl}/api/admin/users`);
             const data = await response.json();
 
             if (data.success) {
@@ -166,15 +173,15 @@ class AdminPanel {
         const tbody = document.getElementById('users-table-body');
         
         if (this.filteredUsers.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5">暂无用户</td></tr>';
+            TellUI.syncMarkup(tbody, '<tr><td colspan="5">暂无用户</td></tr>');
             return;
         }
 
-        tbody.innerHTML = this.filteredUsers.map(user => {
+        const html = this.filteredUsers.map(user => {
             const createdAt = user.created_at ? new Date(user.created_at).toLocaleString('zh-CN') : '未知';
             const isSelected = this.selectedUsers.has(user.id);
             return `
-                <tr>
+                <tr data-row-id="user:${user.id}">
                     <td style="display: ${this.userSelectMode ? 'table-cell' : 'none'}">
                         <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="admin.toggleUserSelect('${user.id}', this.checked)">
                     </td>
@@ -190,6 +197,7 @@ class AdminPanel {
                 </tr>
             `;
         }).join('');
+        TellUI.syncMarkup(tbody, html);
     }
 
     toggleUserSelectMode() {
@@ -253,7 +261,7 @@ class AdminPanel {
 
     async loadGroups() {
         try {
-            const response = await fetch(`${this.baseUrl}/api/admin/groups`);
+            const response = await this.adminFetch(`${this.baseUrl}/api/admin/groups`);
             const data = await response.json();
 
             if (data.success) {
@@ -271,15 +279,15 @@ class AdminPanel {
         const tbody = document.getElementById('groups-table-body');
         
         if (this.filteredGroups.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6">暂无群聊</td></tr>';
+            TellUI.syncMarkup(tbody, '<tr><td colspan="6">暂无群聊</td></tr>');
             return;
         }
 
-        tbody.innerHTML = this.filteredGroups.map(group => {
+        const html = this.filteredGroups.map(group => {
             const createdAt = group.created_at ? new Date(group.created_at).toLocaleString('zh-CN') : '未知';
             const isSelected = this.selectedGroups.has(group.id);
             return `
-                <tr>
+                <tr data-row-id="group:${group.id}">
                     <td style="display: ${this.groupSelectMode ? 'table-cell' : 'none'}">
                         <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="admin.toggleGroupSelect('${group.id}', this.checked)">
                     </td>
@@ -295,6 +303,7 @@ class AdminPanel {
                 </tr>
             `;
         }).join('');
+        TellUI.syncMarkup(tbody, html);
     }
 
     toggleGroupSelectMode() {
@@ -354,37 +363,37 @@ class AdminPanel {
         this.renderGroups();
     }
 
-    showBatchUserDeleteConfirm() {
+    async showBatchUserDeleteConfirm() {
         if (this.selectedUsers.size === 0) {
-            alert('请先选择要删除的用户');
+            await TellDialogs.alert('请先选择要删除的用户');
             return;
         }
         this.currentBatchOperation = 'deleteUsers';
         document.getElementById('batch-modal-title').textContent = '批量删除用户';
         document.getElementById('batch-modal-message').textContent = `确定要删除选中的用户吗？此操作不可恢复！`;
         document.getElementById('batch-selected-count').textContent = `共选中 ${this.selectedUsers.size} 位用户`;
-        document.getElementById('batch-confirm-modal').style.display = 'block';
+        document.getElementById('batch-confirm-modal').style.display = 'flex';
     }
 
-    showBatchGroupDeleteConfirm() {
+    async showBatchGroupDeleteConfirm() {
         if (this.selectedGroups.size === 0) {
-            alert('请先选择要解散的群聊');
+            await TellDialogs.alert('请先选择要解散的群聊');
             return;
         }
         this.currentBatchOperation = 'deleteGroups';
         document.getElementById('batch-modal-title').textContent = '批量解散群聊';
         document.getElementById('batch-modal-message').textContent = `确定要解散选中的群聊吗？此操作不可恢复！`;
         document.getElementById('batch-selected-count').textContent = `共选中 ${this.selectedGroups.size} 个群聊`;
-        document.getElementById('batch-confirm-modal').style.display = 'block';
+        document.getElementById('batch-confirm-modal').style.display = 'flex';
     }
 
-    showBatchUserPasswordModal() {
+    async showBatchUserPasswordModal() {
         if (this.selectedUsers.size === 0) {
-            alert('请先选择要修改密码的用户');
+            await TellDialogs.alert('请先选择要修改密码的用户');
             return;
         }
         document.getElementById('selected-user-count').textContent = this.selectedUsers.size;
-        document.getElementById('batch-user-pwd-modal').style.display = 'block';
+        document.getElementById('batch-user-pwd-modal').style.display = 'flex';
     }
 
     closeBatchUserPasswordModal() {
@@ -414,7 +423,7 @@ class AdminPanel {
         
         for (const userId of userIds) {
             try {
-                const response = await fetch(`${this.baseUrl}/api/admin/users/${userId}`, {
+                const response = await this.adminFetch(`${this.baseUrl}/api/admin/users/${userId}`, {
                     method: 'DELETE'
                 });
                 const data = await response.json();
@@ -431,7 +440,7 @@ class AdminPanel {
         this.loadUsers();
         this.loadStats();
         this.addLog(`批量删除用户完成，成功删除 ${successCount}/${userIds.length} 位用户`, '删除');
-        alert(`批量删除完成，成功删除 ${successCount}/${userIds.length} 位用户`);
+        await TellDialogs.alert(`批量删除完成，成功删除 ${successCount}/${userIds.length} 位用户`);
     }
 
     async batchDeleteGroups() {
@@ -440,7 +449,7 @@ class AdminPanel {
         
         for (const groupId of groupIds) {
             try {
-                const response = await fetch(`${this.baseUrl}/api/admin/groups/${groupId}`, {
+                const response = await this.adminFetch(`${this.baseUrl}/api/admin/groups/${groupId}`, {
                     method: 'DELETE'
                 });
                 const data = await response.json();
@@ -456,7 +465,7 @@ class AdminPanel {
         this.toggleGroupSelectMode();
         this.loadGroups();
         this.addLog(`批量解散群聊完成，成功解散 ${successCount}/${groupIds.length} 个群聊`, '删除');
-        alert(`批量解散完成，成功解散 ${successCount}/${groupIds.length} 个群聊`);
+        await TellDialogs.alert(`批量解散完成，成功解散 ${successCount}/${groupIds.length} 个群聊`);
     }
 
     async changeBatchUserPassword() {
@@ -484,7 +493,7 @@ class AdminPanel {
         
         for (const userId of userIds) {
             try {
-                const response = await fetch(`${this.baseUrl}/api/admin/users/${userId}/password`, {
+                const response = await this.adminFetch(`${this.baseUrl}/api/admin/users/${userId}/password`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ newPassword })
@@ -502,14 +511,14 @@ class AdminPanel {
         this.selectedUsers.clear();
         this.toggleUserSelectMode();
         this.addLog(`批量修改密码完成，成功修改 ${successCount}/${userIds.length} 位用户的密码`, '系统');
-        alert(`批量修改密码完成，成功修改 ${successCount}/${userIds.length} 位用户的密码`);
+        await TellDialogs.alert(`批量修改密码完成，成功修改 ${successCount}/${userIds.length} 位用户的密码`);
     }
 
     async deleteGroup(groupId, groupName) {
-        if (!confirm(`确定要解散群聊 "${groupName}" 吗？此操作不可恢复！`)) return;
+        if (!await TellDialogs.confirm(`确定要解散群聊 "${groupName}" 吗？此操作不可恢复！`)) return;
 
         try {
-            const response = await fetch(`${this.baseUrl}/api/admin/groups/${groupId}`, {
+            const response = await this.adminFetch(`${this.baseUrl}/api/admin/groups/${groupId}`, {
                 method: 'DELETE'
             });
 
@@ -519,16 +528,16 @@ class AdminPanel {
                 this.loadGroups();
                 this.addLog(`群聊 ${groupName} 已解散`, '删除');
             } else {
-                alert('解散失败');
+                await TellDialogs.alert('解散失败');
             }
         } catch (error) {
             console.error('Delete group error:', error);
-            alert('解散失败');
+            await TellDialogs.alert('解散失败');
         }
     }
 
     showChangePasswordModal() {
-        document.getElementById('change-pwd-modal').style.display = 'block';
+        document.getElementById('change-pwd-modal').style.display = 'flex';
     }
 
     closeChangePasswordModal() {
@@ -556,7 +565,7 @@ class AdminPanel {
         }
 
         try {
-            const response = await fetch(`${this.baseUrl}/api/admin/change-password`, {
+            const response = await this.adminFetch(`${this.baseUrl}/api/admin/change-password`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ oldPassword, newPassword })
@@ -565,7 +574,7 @@ class AdminPanel {
             const data = await response.json();
 
             if (data.success) {
-                alert('密码修改成功');
+                await TellDialogs.alert('密码修改成功');
                 this.closeChangePasswordModal();
                 this.addLog('管理员密码已修改', '系统');
             } else {
@@ -579,7 +588,7 @@ class AdminPanel {
     showChangeUserPasswordModal(userId, username) {
         this.targetUserId = userId;
         document.getElementById('target-username').textContent = username;
-        document.getElementById('change-user-pwd-modal').style.display = 'block';
+        document.getElementById('change-user-pwd-modal').style.display = 'flex';
     }
 
     closeChangeUserPasswordModal() {
@@ -611,7 +620,7 @@ class AdminPanel {
         }
 
         try {
-            const response = await fetch(`${this.baseUrl}/api/admin/users/${this.targetUserId}/password`, {
+            const response = await this.adminFetch(`${this.baseUrl}/api/admin/users/${this.targetUserId}/password`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ newPassword })
@@ -620,7 +629,7 @@ class AdminPanel {
             const data = await response.json();
 
             if (data.success) {
-                alert('密码修改成功');
+                await TellDialogs.alert('密码修改成功');
                 this.closeChangeUserPasswordModal();
                 this.addLog(`用户密码已修改`, '系统');
             } else {
@@ -632,10 +641,10 @@ class AdminPanel {
     }
 
     async deleteUser(userId, username) {
-        if (!confirm(`确定要删除用户 ${username} 吗？此操作不可恢复！`)) return;
+        if (!await TellDialogs.confirm(`确定要删除用户 ${username} 吗？此操作不可恢复！`)) return;
 
         try {
-            const response = await fetch(`${this.baseUrl}/api/admin/users/${userId}`, {
+            const response = await this.adminFetch(`${this.baseUrl}/api/admin/users/${userId}`, {
                 method: 'DELETE'
             });
 
@@ -646,11 +655,11 @@ class AdminPanel {
                 this.loadStats();
                 this.addLog(`用户 ${username} 已删除`, '删除');
             } else {
-                alert('删除失败');
+                await TellDialogs.alert('删除失败');
             }
         } catch (error) {
             console.error('Delete user error:', error);
-            alert('删除失败');
+            await TellDialogs.alert('删除失败');
         }
     }
 
@@ -677,12 +686,12 @@ class AdminPanel {
         const welcomeMessage = document.getElementById('welcome-message-input').value.trim();
         
         if (!welcomeMessage) {
-            alert('欢迎消息不能为空');
+            await TellDialogs.alert('欢迎消息不能为空');
             return;
         }
 
         try {
-            const response = await fetch(`${this.baseUrl}/api/admin/official/welcome-message`, {
+            const response = await this.adminFetch(`${this.baseUrl}/api/admin/official/welcome-message`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: welcomeMessage })
@@ -691,14 +700,14 @@ class AdminPanel {
             const data = await response.json();
 
             if (data.success) {
-                alert('欢迎消息保存成功');
+                await TellDialogs.alert('欢迎消息保存成功');
                 this.addLog(`欢迎消息已更新`, '系统');
             } else {
-                alert(data.message || '保存失败');
+                await TellDialogs.alert(data.message || '保存失败');
             }
         } catch (error) {
             console.error('Save welcome message error:', error);
-            alert('保存失败');
+            await TellDialogs.alert('保存失败');
         }
     }
 
@@ -706,16 +715,16 @@ class AdminPanel {
         const message = document.getElementById('broadcast-message-input').value.trim();
         
         if (!message) {
-            alert('消息内容不能为空');
+            await TellDialogs.alert('消息内容不能为空');
             return;
         }
 
-        if (!confirm(`确定要向所有用户发送此消息吗？\n\n${message}`)) {
+        if (!await TellDialogs.confirm(`确定要向所有用户发送此消息吗？\n\n${message}`)) {
             return;
         }
 
         try {
-            const response = await fetch(`${this.baseUrl}/api/admin/official/broadcast`, {
+            const response = await this.adminFetch(`${this.baseUrl}/api/admin/official/broadcast`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message })
@@ -724,15 +733,15 @@ class AdminPanel {
             const data = await response.json();
 
             if (data.success) {
-                alert(`消息已发送给 ${data.count} 位用户`);
+                await TellDialogs.alert(`消息已发送给 ${data.count} 位用户`);
                 document.getElementById('broadcast-message-input').value = '';
                 this.addLog(`向 ${data.count} 位用户发送了群发消息`, '系统');
             } else {
-                alert(data.message || '发送失败');
+                await TellDialogs.alert(data.message || '发送失败');
             }
         } catch (error) {
             console.error('Send broadcast message error:', error);
-            alert('发送失败');
+            await TellDialogs.alert('发送失败');
         }
     }
 }

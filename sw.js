@@ -1,11 +1,16 @@
-let CACHE_NAME = 'tell-v5.9.67';
-let API_CACHE_NAME = 'tell-api-v5.9.67';
+// Cache identity is immutable across worker restarts and belongs to this release.
+const CACHE_NAME = 'tell-v5.9.71';
 
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/styles.css',
+  '/theme.css',
+  '/glass.css',
+  '/glass-dialogs.js',
+  '/theme.js',
   '/app.js',
+  '/ui-runtime.js',
   '/version.js',
   '/manifest.json',
   '/logo.jpg',
@@ -15,32 +20,6 @@ const STATIC_ASSETS = [
   '/admin.js'
 ];
 
-const API_ROUTES = [
-  '/api/user',
-  '/api/friends',
-  '/api/groups',
-  '/api/messages'
-];
-
-async function getVersion() {
-  try {
-    const response = await fetch('/version.js');
-    const text = await response.text();
-    const versionMatch = text.match(/major:\s*(\d+),\s*minor:\s*(\d+),\s*patch:\s*(\d+)/);
-    if (versionMatch) {
-      const [, major, minor, patch] = versionMatch;
-      return {
-        version: `v${major}.${minor}.${patch}`,
-        cacheName: `tell-v${major}.${minor}.${patch}`,
-        apiCacheName: `tell-api-v${major}.${minor}.${patch}`
-      };
-    }
-  } catch (error) {
-    console.log('[SW] Failed to fetch version.js:', error);
-  }
-  return null;
-}
-
 let notificationSettings = {
   floatingNotification: true,
   lockscreenNotification: true
@@ -49,34 +28,20 @@ let notificationSettings = {
 self.addEventListener('install', (event) => {
   console.log('[SW] Installing Service Worker...');
   event.waitUntil(
-    getVersion().then(info => {
-      if (info) {
-        CACHE_NAME = info.cacheName;
-        API_CACHE_NAME = info.apiCacheName;
-      }
-    }).then(() => {
-      return caches.open(CACHE_NAME);
-    }).then((cache) => {
+    caches.open(CACHE_NAME).then((cache) => {
       console.log('[SW] Caching static assets');
       return cache.addAll(STATIC_ASSETS);
     }).then(() => self.skipWaiting())
-    .catch((err) => console.log('[SW] Cache failed:', err))
   );
 });
 
 self.addEventListener('activate', (event) => {
   console.log('[SW] Activating Service Worker...');
   event.waitUntil(
-    getVersion().then(info => {
-      if (info) {
-        CACHE_NAME = info.cacheName;
-        API_CACHE_NAME = info.apiCacheName;
-      }
-      return caches.keys();
-    }).then((cacheNames) => {
+    caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames
-          .filter((name) => name !== CACHE_NAME && name !== API_CACHE_NAME)
+          .filter((name) => /^tell-(?:v|api-v)/.test(name) && name !== CACHE_NAME)
           .map((name) => {
             console.log('[SW] Deleting old cache:', name);
             return caches.delete(name);
@@ -96,7 +61,10 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (url.pathname.startsWith('/api/')) {
-    event.respondWith(networkFirst(request, API_CACHE_NAME));
+    // Never replay stale messages, authentication results or another user's data.
+    event.respondWith(fetch(request).catch(() => new Response(JSON.stringify({
+      success: false, message: '当前处于离线状态，输入内容已保留'
+    }), { status: 503, headers: { 'Content-Type': 'application/json' } })));
     return;
   }
 
@@ -104,15 +72,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (url.origin === location.origin) {
+  if (url.origin === location.origin && STATIC_ASSETS.includes(url.pathname)) {
     event.respondWith(cacheFirst(request, CACHE_NAME));
   } else {
-    event.respondWith(networkFirst(request, CACHE_NAME));
+    event.respondWith(fetch(request));
   }
 });
 
 async function cacheFirst(request, cacheName) {
-  const cachedResponse = await caches.match(request);
+  const cache = await caches.open(cacheName);
+  const cachedResponse = await cache.match(request);
   if (cachedResponse) {
     return cachedResponse;
   }
@@ -120,8 +89,7 @@ async function cacheFirst(request, cacheName) {
   try {
     const networkResponse = await fetch(request);
     if (networkResponse.ok) {
-      const cache = await caches.open(cacheName);
-      cache.put(request, networkResponse.clone());
+      await cache.put(request, networkResponse.clone());
     }
     return networkResponse;
   } catch (error) {
@@ -211,7 +179,8 @@ self.addEventListener('notificationclick', (event) => {
       .then((clientList) => {
         for (const client of clientList) {
           if (client.url.includes(self.location.origin) && 'focus' in client) {
-            client.navigate(urlToOpen);
+            // Focusing an open conversation must not destroy its draft or call.
+            client.postMessage({ type: 'NOTIFICATION_OPEN', url: urlToOpen });
             return client.focus();
           }
         }

@@ -22,6 +22,9 @@
     <link rel="preload" href="version.js" as="script">
     <link rel="preload" href="app.js" as="script">
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="theme.css">
+    <link rel="stylesheet" href="glass.css">
+    <script src="theme.js"></script>
     <script src="version.js"></script>
 </head>
 <body>
@@ -34,12 +37,13 @@
                     <p>倾听耳边语</p>
                 </div>
 
-                <div class="auth-tabs">
-                    <button id="login-tab" class="active">登录</button>
-                    <button id="register-tab">注册</button>
+                <div class="auth-tabs" role="tablist" aria-label="账号入口">
+                    <div class="auth-tab-slider" aria-hidden="true"></div>
+                    <button type="button" id="login-tab" class="active" role="tab" aria-controls="login-form" aria-selected="true" tabindex="0">登录</button>
+                    <button type="button" id="register-tab" role="tab" aria-controls="register-form" aria-selected="false" tabindex="-1">注册</button>
                 </div>
 
-                <form id="login-form">
+                <form id="login-form" role="tabpanel" aria-labelledby="login-tab">
                     <input type="text" id="login-username" placeholder="账号" required>
                     <input type="password" id="login-password" placeholder="密码" required>
                     <button type="submit" id="login-form-submit-btn">登录</button>
@@ -47,7 +51,7 @@
                     <p class="auth-link">还没有账号？立即注册</p>
                 </form>
 
-                <form id="register-form" style="display: none;">
+                <form role="tabpanel" aria-labelledby="register-tab" id="register-form" style="display: none;">
                     <input type="text" id="register-username" placeholder="账号（支持中文/英文/符号，至少2字符）" required>
                     <input type="password" id="register-password" placeholder="密码" required>
                     <input type="password" id="register-password-confirm" placeholder="确认密码" required>
@@ -78,7 +82,7 @@
         <div id="main-screen" class="screen" style="display: none;">
             <div class="main-wrapper">
                 <main class="main-content">
-                    <div id="tab-chats" class="tab-content active">
+                    <div id="tab-chats" role="tabpanel" aria-labelledby="nav-chats" class="tab-content active">
                         <div class="tab-header">
                             <h2>消息</h2>
                             <button id="tab-plus-btn" class="tab-plus-btn">+</button>
@@ -116,7 +120,7 @@
                         </div>
                     </div>
 
-                    <div id="tab-contacts" class="tab-content">
+                    <div id="tab-contacts" role="tabpanel" aria-labelledby="nav-contacts" class="tab-content">
                         <div class="tab-header">
                             <h2>通讯录</h2>
                             <button id="contacts-plus-btn" class="tab-plus-btn">+</button>
@@ -155,7 +159,7 @@
                         </div>
                     </div>
 
-                    <div id="tab-discover" class="tab-content">
+                    <div id="tab-discover" role="tabpanel" aria-labelledby="nav-discover" class="tab-content">
                         <div class="tab-header">
                             <h2>发现</h2>
                         </div>
@@ -165,7 +169,7 @@
                                     <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
                                     <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
                                 </svg>
-                                <span>分享应用</span>
+                                <span class="discover-copy"><span>分享应用</span><small>把 Tell 分享给朋友</small></span>
                                 <span class="arrow">›</span>
                             </div>
                             <div class="discover-item" id="admin-panel-btn">
@@ -173,7 +177,7 @@
                                     <circle cx="12" cy="12" r="3"/>
                                     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
                                 </svg>
-                                <span>后台管理</span>
+                                <span class="discover-copy"><span>后台管理</span><small>管理用户、群组与应用配置</small></span>
                                 <span class="arrow">›</span>
                             </div>
                             <div class="discover-item" id="tell-intro-btn" onclick="window.open('https://tell.super.site/', '_blank')">
@@ -183,7 +187,7 @@
                                     <line x1="8" y1="3" x2="8" y2="7"/>
                                     <line x1="3" y1="16" x2="21" y2="16"/>
                                 </svg>
-                                <span>Tell官方介绍</span>
+                                <span class="discover-copy"><span>Tell官方介绍</span><small>了解功能与使用方式</small></span>
                                 <span class="arrow">›</span>
                             </div>
                             <div class="discover-item" id="contact-developer-btn" onclick="window.open('https://ilcy.super.site/', '_blank')">
@@ -191,7 +195,7 @@
                                     <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
                                     <circle cx="12" cy="7" r="4"/>
                                 </svg>
-                                <span>联系开发者</span>
+                                <span class="discover-copy"><span>联系开发者</span><small>反馈问题与使用建议</small></span>
                                 <span class="arrow">›</span>
                             </div>
                             <div class="discover-item" id="other-projects-btn" onclick="window.open('https://ablcy.github.io/', '_blank')">
@@ -200,13 +204,13 @@
                                     <line x1="3" y1="9" x2="21" y2="9"/>
                                     <line x1="9" y1="21" x2="9" y2="9"/>
                                 </svg>
-                                <span>其他项目</span>
+                                <span class="discover-copy"><span>其他项目</span><small>看看更多应用与作品</small></span>
                                 <span class="arrow">›</span>
                             </div>
                         </div>
                     </div>
 
-                    <div id="tab-me" class="tab-content">
+                    <div id="tab-me" role="tabpanel" aria-labelledby="nav-me" class="tab-content">
                         <div class="profile-header">
                             <div class="avatar-large" id="profile-avatar-container" style="cursor: pointer;">
                                 <img id="profile-avatar-img" src="" alt="头像" style="display: none; width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">
@@ -219,6 +223,7 @@
                         </div>
                         <input type="file" id="avatar-upload-input" accept="image/*" style="display: none;">
                         <div class="settings-list">
+                            <section class="settings-group" aria-label="账号管理"><h3 class="settings-group-title">账号管理</h3>
                             <div class="settings-item" id="change-username-btn">
                                 <div class="settings-item-left">
                                     <svg class="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -250,6 +255,8 @@
                                 </div>
                                 <span class="arrow">›</span>
                             </div>
+                            </section>
+                            <section class="settings-group" aria-label="偏好与通知"><h3 class="settings-group-title">偏好与通知</h3>
                             <div class="settings-item" id="toggle-theme-btn">
                                 <div class="settings-item-left">
                                     <svg class="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -305,6 +312,7 @@
                                 </div>
                                 <span class="arrow">›</span>
                             </div>
+                            </section>
                         </div>
                         <div class="update-info" style="display: none;">
                             <div class="update-header" id="update-header" style="cursor: pointer;">
@@ -326,14 +334,15 @@
                     </div>
                 </main>
 
-                <nav class="bottom-nav">
-                    <div class="nav-item active" data-tab="chats">
+                <nav class="bottom-nav" role="tablist" aria-label="主界面">
+                    <div class="nav-slider" aria-hidden="true"></div>
+                    <button type="button" class="nav-item active" data-tab="chats" id="nav-chats" role="tab" aria-controls="tab-chats" aria-selected="true" tabindex="0">
                         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                         </svg>
                         <span>消息</span>
-                    </div>
-                    <div class="nav-item" data-tab="contacts">
+                    </button>
+                    <button type="button" class="nav-item" data-tab="contacts" id="nav-contacts" role="tab" aria-controls="tab-contacts" aria-selected="false" tabindex="-1">
                         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
                             <circle cx="9" cy="7" r="4"/>
@@ -341,21 +350,21 @@
                             <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
                         </svg>
                         <span>通讯录</span>
-                    </div>
-                    <div class="nav-item" data-tab="discover">
+                    </button>
+                    <button type="button" class="nav-item" data-tab="discover" id="nav-discover" role="tab" aria-controls="tab-discover" aria-selected="false" tabindex="-1">
                         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/>
                             <line x1="12" y1="22" x2="12" y2="15.5"/>
                         </svg>
                         <span>发现</span>
-                    </div>
-                    <div class="nav-item" data-tab="me">
+                    </button>
+                    <button type="button" class="nav-item" data-tab="me" id="nav-me" role="tab" aria-controls="tab-me" aria-selected="false" tabindex="-1">
                         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
                             <circle cx="12" cy="7" r="4"/>
                         </svg>
                         <span>我</span>
-                    </div>
+                    </button>
                 </nav>
             </div>
 
@@ -598,6 +607,8 @@
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
+    <script src="ui-runtime.js"></script>
+    <script src="glass-dialogs.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

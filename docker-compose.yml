@@ -1,29 +1,40 @@
-version: '3.8'
-
+name: tell
 services:
-  coturn:
-    image: coturn/coturn:latest
-    container_name: coturn-server
-    network_mode: host
-    restart: unless-stopped
-    command: >
-      -n
-      --listening-port=3478
-      --tls-listening-port=5349
-      --external-ip=114.215.182.61
-      --realm=link.tell.chat
-      --user=telluser:tellpassword123
-      --min-port=49152
-      --max-port=65535
-      --verbose
-      --log-file=/var/log/coturn.log
-    volumes:
-      - ./coturn/logs:/var/log
-      - ./coturn/certs:/etc/coturn/certs
+  app:
+    image: tell-chat:5.9.71
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-5555}:3000"
     environment:
-      - TZ=Asia/Shanghai
+      NODE_ENV: production
+      PORT: "3000"
+      TZ: Asia/Shanghai
+      DATA_DIR: /app/data
+      UPLOAD_DIR: /app/uploads
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Please run bash deploy/start.sh to initialize .env}
+      AI_API_KEY: ${AI_API_KEY:-}
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_USERNAME: ${TURN_USERNAME:-}
+      TURN_PASSWORD: ${TURN_PASSWORD:-}
+      DATABASE_URL: ${DATABASE_URL:-}
+      DATABASE_SSL: ${DATABASE_SSL:-true}
+      DATABASE_SSL_REJECT_UNAUTHORIZED: ${DATABASE_SSL_REJECT_UNAUTHORIZED:-true}
+    volumes:
+      - tell-data:/app/data
+      - tell-uploads:/app/uploads
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-networks:
-  default:
-    external:
-      name: host
+volumes:
+  tell-data:
+  tell-uploads:
